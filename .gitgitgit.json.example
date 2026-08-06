@@ -10,10 +10,18 @@
     "pre": ["pre", "preview", "staging", "stage", "qa", "beta"],
     "prod": ["prod", "production", "produccion", "real", "live"]
   },
-  "supabase": {
+  "backend": {
+    "provider": "supabase",
     "cli": "supabase",
-    "pruebas_project_ref": "RELLENAR_PROJECT_REF_PRUEBAS",
-    "prod_project_ref": "RELLENAR_PROJECT_REF_PROD"
+    "auto_detect": true,
+    "environments": {
+      "pre": {
+        "project_ref_env": "SUPABASE_PRE_PROJECT_REF"
+      },
+      "prod": {
+        "project_ref_env": "SUPABASE_PROD_PROJECT_REF"
+      }
+    }
   },
   "checks": []
 }
