@@ -1,0 +1,19 @@
+{
+  "remote": "origin",
+  "branches": {
+    "dev": null,
+    "pre": null,
+    "prod": null
+  },
+  "branch_aliases": {
+    "dev": ["dev", "develop", "development", "desarrollo", "work"],
+    "pre": ["pre", "preview", "staging", "stage", "qa", "beta"],
+    "prod": ["prod", "production", "produccion", "real", "live"]
+  },
+  "supabase": {
+    "cli": "supabase",
+    "pruebas_project_ref": "RELLENAR_PROJECT_REF_PRUEBAS",
+    "prod_project_ref": "RELLENAR_PROJECT_REF_PROD"
+  },
+  "checks": []
+}
