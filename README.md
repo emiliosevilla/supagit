@@ -1,11 +1,12 @@
 # supagit
 
 `supagit` is a fail-closed promotion pipeline for projects that publish code
-through an ordered sequence of Git branches.
+through an ordered sequence of Git branches. These projects may have, or not,
+a backend consisting on Supabase environments. 
 
-The command, installer, and tests live in [`scripts/`](scripts/). The project
-configuration template is [`.supagit.json.example`](.supagit.json.example), and
-the agent-specific operating instructions are in
+The bash command, installer, and tests live in [`scripts/`](scripts/).
+The project configuration template is [`.supagit.json.example`](.supagit.json.example), and
+the agent-specific skill operating instructions are in
 [`docs/supagit-agent-command.md`](docs/supagit-agent-command.md).
 
 ## Installation
