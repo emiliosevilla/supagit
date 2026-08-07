@@ -1,33 +1,34 @@
-# gitgitgit
+# supagit
 
-`gitgitgit` is a fail-closed promotion pipeline for projects that publish code
+`supagit` is a fail-closed promotion pipeline for projects that publish code
 through an ordered sequence of Git branches.
 
 The command, installer, and tests live in [`scripts/`](scripts/). The project
-configuration template is [`.gitgitgit.json.example`](.gitgitgit.json.example),
-and the agent-specific operating instructions are in
-[`docs/gitgitgit-agent-command.md`](docs/gitgitgit-agent-command.md).
+configuration template is [`.supagit.json.example`](.supagit.json.example), and
+the agent-specific operating instructions are in
+[`docs/supagit-agent-command.md`](docs/supagit-agent-command.md).
 
 ## Installation
 
 From this repository, install the global command and agent files with:
 
 ```bash
-scripts/install-gitgitgit-global.sh
+scripts/install-supagit-global.sh
 ```
 
-The installer updates `~/.local/bin/gitgitgit` and the local skill/command
-copies. It records this repository as the source and does not alter a project
-repository.
+The installer updates `~/.local/bin/supagit` and the local skill/command copies.
+It records this repository as the source and does not alter a project
+repository. It also removes any previous generated launcher and skill files so
+there is one command name only.
 
-After the first installation, running `gitgitgit` checks the registered source
+After the first installation, running `supagit` checks the registered source
 against the global copy and updates the skill automatically when it is stale.
 If the source repository has moved, run this installer again from its new path.
 
 ## Configuration
 
-Create `.gitgitgit.json` in the project root, starting from
-`.gitgitgit.json.example`. The legacy `branches` object supports automatic
+Create `.supagit.json` in the project root, starting from
+`.supagit.json.example`. The legacy `branches` object supports automatic
 detection of `dev`, `pre`, and `prod`. For any other number of stages, use an
 ordered list; each name must exist on the remote:
 
@@ -81,34 +82,34 @@ other than `supabase` and `none` are not implemented yet.
 From the target project repository, create its local ignored configuration with:
 
 ```bash
-gitgitgit init --backend none
+supagit init --backend none
 ```
 
 For a Supabase project, use:
 
 ```bash
-gitgitgit init --backend supabase
+supagit init --backend supabase
 ```
 
-The initializer refuses to overwrite an existing `.gitgitgit.json`. It writes
+The initializer refuses to overwrite an existing `.supagit.json`. It writes
 only backend/branch configuration; it does not install the global command or
 store Supabase IDs.
 
 Pass ordered branches when the project does not use the legacy three-stage
-layout, for example `gitgitgit init --backend none --branches main`.
+layout, for example `supagit init --backend none --branches main`.
 
 ## Running
 
 Always inspect the plan first:
 
 ```bash
-scripts/gitgitgit --dry-run
+scripts/supagit --dry-run
 ```
 
 Then run the confirmed pipeline:
 
 ```bash
-scripts/gitgitgit
+scripts/supagit
 ```
 
 The pipeline publishes local changes on the first branch, runs configured

@@ -1,20 +1,20 @@
 ---
-name: gitgitgit
+name: supagit
 description: Publica un proyecto desde la rama de desarrollo hasta producción, detectando las ramas remotas y migrando cada BD antes del código que la utiliza.
 ---
 
-# `gitgitgit`
+# `supagit`
 
 Use the main repository, not a linked worktree. The only command name is
-`gitgitgit`.
+`supagit`.
 
 Before running it, the agent must measure the working directory, Git root,
-branch, status, and worktrees; read `.gitgitgit.json`; run
-`gitgitgit --dry-run`; and request explicit confirmation.
+branch, status, and worktrees; read `.supagit.json`; run
+`supagit --dry-run`; and request explicit confirmation.
 
-If the target project has no `.gitgitgit.json`, initialize it from the target
-repository with `gitgitgit init --backend none` or
-`gitgitgit init --backend supabase`. The initializer never overwrites an
+If the target project has no `.supagit.json`, initialize it from the target
+repository with `supagit init --backend none` or
+`supagit init --backend supabase`. The initializer never overwrites an
 existing configuration.
 
 The global launcher checks the registered source before starting the skill. If

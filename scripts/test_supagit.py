@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small unit tests for gitgitgit's pure discovery helpers."""
+"""Small unit tests for supagit's pure discovery helpers."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ import unittest
 from unittest.mock import patch
 
 
-SCRIPT = Path(__file__).with_name("gitgitgit.py")
-SPEC = importlib.util.spec_from_file_location("gitgitgit_engine", SCRIPT)
+SCRIPT = Path(__file__).with_name("supagit.py")
+SPEC = importlib.util.spec_from_file_location("supagit_engine", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
@@ -46,14 +46,14 @@ class BranchDiscoveryTests(unittest.TestCase):
     def test_ordered_branch_list_is_valid(self) -> None:
         MODULE.Pipeline._validate_config(
             {"branches": ["main", "production"], "backend": {"provider": "none"}},
-            Path(".gitgitgit.json"),
+            Path(".supagit.json"),
         )
 
     def test_duplicate_ordered_branches_are_rejected(self) -> None:
         with self.assertRaisesRegex(MODULE.ShipError, "duplicate"):
             MODULE.Pipeline._validate_config(
                 {"branches": ["main", "main"], "backend": {"provider": "none"}},
-                Path(".gitgitgit.json"),
+                Path(".supagit.json"),
             )
 
     def test_commit_prompt_uses_green_when_color_is_forced(self) -> None:
@@ -66,12 +66,14 @@ class BranchDiscoveryTests(unittest.TestCase):
             color="always",
         )
         with patch("builtins.input", return_value="release message") as mocked_input:
-            message = pipeline.prompt("Commit message for dev: ")
+            pipeline.dev = "main"
+            message = pipeline._commit_message()
 
         self.assertEqual(message, "release message")
         prompt = mocked_input.call_args.args[0]
         self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
         self.assertTrue(prompt.endswith(MODULE.Pipeline.RESET))
+        self.assertIn("Commit message for main: ", prompt)
 
     def test_success_status_uses_green_when_color_is_forced(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -143,7 +145,7 @@ class BackendDiscoveryTests(unittest.TestCase):
 
     def test_none_backend_is_valid(self) -> None:
         MODULE.Pipeline._validate_config(
-            self.base_config({"provider": "none"}), Path(".gitgitgit.json")
+            self.base_config({"provider": "none"}), Path(".supagit.json")
         )
 
     def test_legacy_supabase_config_is_still_valid(self) -> None:
@@ -154,7 +156,7 @@ class BackendDiscoveryTests(unittest.TestCase):
                 "prod_project_ref": "production-ref",
             },
         }
-        MODULE.Pipeline._validate_config(config, Path(".gitgitgit.json"))
+        MODULE.Pipeline._validate_config(config, Path(".supagit.json"))
         backend = self.pipeline._resolve_backend_from_config(config)
         self.assertEqual(backend.targets, {"pre": "testing-ref", "prod": "production-ref"})
 

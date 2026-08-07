@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed promotion pipeline for gitgitgit.
+"""Fail-closed promotion pipeline for supagit.
 
 This script is intentionally independent from the repository's existing
 deployment commands. A project may use Supabase or no backend at all.
@@ -100,7 +100,7 @@ def git_root_for_init() -> Path:
     )
     if completed.returncode != 0:
         details = completed.stderr.strip() or "not inside a Git repository"
-        raise ShipError(f"Cannot initialize gitgitgit here: {details}.")
+        raise ShipError(f"Cannot initialize supagit here: {details}.")
     return Path(completed.stdout.strip()).resolve()
 
 
@@ -111,12 +111,12 @@ def init_prompt(message: str, color: str) -> str:
 
 def initialise_project(args: argparse.Namespace, options: Options) -> int:
     if args.config is not None:
-        raise ShipError("--config cannot be used with gitgitgit init.")
+        raise ShipError("--config cannot be used with supagit init.")
     if args.backend == "none" and (args.pre_ref_env or args.prod_ref_env):
         raise ShipError("--pre-ref-env and --prod-ref-env only apply to --backend supabase.")
 
     root = git_root_for_init()
-    config_path = root / ".gitgitgit.json"
+    config_path = root / ".supagit.json"
     if config_path.exists():
         raise ShipError(
             f"Configuration already exists at {config_path}; refusing to overwrite it."
@@ -125,7 +125,7 @@ def initialise_project(args: argparse.Namespace, options: Options) -> int:
     backend = args.backend
     if backend is None:
         if not sys.stdin.isatty():
-            raise ShipError("gitgitgit init requires --backend none|supabase when no TTY is available.")
+            raise ShipError("supagit init requires --backend none|supabase when no TTY is available.")
         backend = init_prompt("Backend [none/supabase] (none): ", options.color).lower() or "none"
     if backend not in {"none", "supabase"}:
         raise ShipError("Backend must be 'none' or 'supabase'.")
@@ -199,13 +199,13 @@ class Pipeline:
     def _load_config(self) -> dict:
         path = self.options.config_path
         if path is None:
-            path = self.root / ".gitgitgit.json"
+            path = self.root / ".supagit.json"
         elif not path.is_absolute():
             path = (Path.cwd() / path).resolve()
         if not path.is_file():
             raise ShipError(
                 f"Missing configuration file {path}. "
-                "Create .gitgitgit.json with a backend configuration."
+                "Create .supagit.json with a backend configuration."
             )
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
@@ -501,7 +501,7 @@ class Pipeline:
                 raise ShipError(
                     f"Could not detect the {role} branch. Available remote branches: "
                     + ", ".join(remote_branches)
-                    + ". Add branches.{role} to .gitgitgit.json."
+                    + ". Add branches.{role} to .supagit.json."
                 )
             top_score = ranked[0][0]
             top = [branch for score, branch in ranked if score == top_score]
@@ -509,7 +509,7 @@ class Pipeline:
                 raise ShipError(
                     f"Ambiguous {role} branch detection: "
                     + ", ".join(top)
-                    + ". Add branches.{role} to .gitgitgit.json."
+                    + ". Add branches.{role} to .supagit.json."
                 )
             resolved[role] = top[0]
         print(
@@ -659,8 +659,10 @@ class Pipeline:
         if self.options.dry_run:
             return "<commit-message-required>"
         if self.options.yes:
-            raise ShipError("With --yes, provide --message/-m for the initial dev commit.")
-        message = self.prompt("Commit message for dev: ")
+            raise ShipError(
+                f"With --yes, provide --message/-m for the initial {self.dev} commit."
+            )
+        message = self.prompt(f"Commit message for {self.dev}: ")
         if not message:
             raise ShipError("The commit message cannot be empty.")
         return message
@@ -850,16 +852,16 @@ class Pipeline:
 
 def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, Options]:
     parser = argparse.ArgumentParser(
-        prog="gitgitgit",
+        prog="supagit",
         description="Initializes project configuration or promotes an ordered branch pipeline.",
     )
-    parser.add_argument("command", nargs="?", choices=("init",), help="Initialize .gitgitgit.json in the current Git project.")
+    parser.add_argument("command", nargs="?", choices=("init",), help="Initialize .supagit.json in the current Git project.")
     parser.add_argument("--config", type=Path, help="Path to the project configuration.")
     parser.add_argument("--dry-run", action="store_true", help="Show the plan without modifying Git or Supabase.")
     parser.add_argument("--yes", action="store_true", help="Skip confirmations; use only with explicit authorization.")
-    parser.add_argument("-m", "--message", help="Initial dev commit message; required with --yes when changes exist.")
-    parser.add_argument("--backend", choices=("none", "supabase"), help="Backend for `gitgitgit init`.")
-    parser.add_argument("--branches", help="Comma-separated ordered branches for `gitgitgit init`.")
+    parser.add_argument("-m", "--message", help="Initial commit message for the first pipeline branch; required with --yes when changes exist.")
+    parser.add_argument("--backend", choices=("none", "supabase"), help="Backend for `supagit init`.")
+    parser.add_argument("--branches", help="Comma-separated ordered branches for `supagit init`.")
     parser.add_argument("--pre-ref-env", help="Environment variable name for the Supabase pre project ref.")
     parser.add_argument("--prod-ref-env", help="Environment variable name for the Supabase prod project ref.")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto", help="Confirmation color: auto, always, or never.")
