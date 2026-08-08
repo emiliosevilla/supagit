@@ -18,6 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+import supagit_layout
 
 GREEN = "\033[32m"
 RED = "\033[31m"
@@ -176,7 +181,10 @@ class Pipeline:
 
     def __init__(self, options: Options) -> None:
         self.options = options
-        self.root = self._git_root()
+        self.layout = supagit_layout.resolve_repo_layout()
+        self.launch_root = self.layout.launch_root
+        self.root = self.layout.main_root
+        self._branch_check_on_main = self.layout.is_linked_launch
         self.config = self._load_config()
         self.remote = self.config.get("remote", "origin")
         self.backend = self._resolve_backend()
@@ -191,10 +199,9 @@ class Pipeline:
 
     def _git_root(self) -> Path:
         try:
-            output = self.run_raw(["git", "rev-parse", "--show-toplevel"], capture=True)
-        except ShipError as exc:
+            return supagit_layout.resolve_repo_layout().main_root
+        except supagit_layout.LayoutError as exc:
             raise ShipError("Not inside a Git repository.") from exc
-        return Path(output.strip()).resolve()
 
     def _load_config(self) -> dict:
         path = self.options.config_path
@@ -578,8 +585,15 @@ class Pipeline:
         capture: bool = False,
         check: bool = True,
         mutating: bool = False,
+        cwd: Path | None = None,
     ) -> str:
-        return self.run_raw(["git", *args], capture=capture, check=check, mutating=mutating)
+        return self.run_raw(
+            ["git", *args],
+            capture=capture,
+            check=check,
+            mutating=mutating,
+            cwd=cwd,
+        )
 
     def confirm(self, message: str) -> None:
         if self.options.dry_run or self.options.yes:
@@ -597,19 +611,23 @@ class Pipeline:
         return input(message).strip()
 
     def validate_workspace(self) -> None:
-        if self.original_branch != self.dev:
+        if self.layout.is_linked_launch:
+            print(
+                f"Launch worktree: {self.launch_root}; promotion checkout: {self.root}"
+            )
+            current_main = self.git("branch", "--show-current", capture=True, cwd=self.root).strip()
+            if current_main != self.dev:
+                raise ShipError(
+                    f"Main checkout must be on {self.dev} (currently {current_main or 'detached'}). "
+                    f"Launch path was {self.launch_root}."
+                )
+        elif self.original_branch != self.dev:
             raise ShipError(
                 f"Wrong checkout: currently on {self.original_branch or '(detached HEAD)'}, "
                 f"but the pipeline must start on {self.dev}."
             )
-        git_dir = Path(self.git("rev-parse", "--git-dir", capture=True).strip()).resolve()
-        common_dir = Path(self.git("rev-parse", "--git-common-dir", capture=True).strip()).resolve()
-        if git_dir != common_dir:
-            raise ShipError(
-                "This checkout is a linked worktree. The pipeline requires the main repository."
-            )
         worktrees = self.git("worktree", "list", "--porcelain", capture=True)
-        if worktrees.count("worktree ") > 1:
+        if worktrees.count("worktree ") > 1 and not self.layout.is_linked_launch:
             self.warning("registered worktrees exist, but the current checkout is the main repository.")
         print(f"Repository: {self.project_name}")
         self.git("remote", "get-url", self.remote)
