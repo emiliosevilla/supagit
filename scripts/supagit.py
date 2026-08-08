@@ -44,6 +44,10 @@ class Options:
     config_path: Path | None
     message: str | None
     color: str
+    no_sweep: bool = False
+    integrate: str | None = None
+    pipeline_order: str | None = None
+    cleanup: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -884,9 +888,30 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, Options]:
     parser.add_argument("--prod-ref-env", help="Environment variable name for the Supabase prod project ref.")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto", help="Confirmation color: auto, always, or never.")
     parser.add_argument("--no-color", action="store_true", help="Use --color never.")
+    parser.add_argument("--no-sweep", action="store_true")
+    parser.add_argument("--integrate", help="Comma-separated feature branches, or 'none'")
+    parser.add_argument("--pipeline", dest="pipeline_order", help="Comma-separated ordered pipeline branches")
+    parser.add_argument("--cleanup", action="store_true", default=None)
+    parser.add_argument("--no-cleanup", action="store_true")
     args = parser.parse_args(argv)
     color = "never" if args.no_color else args.color
-    return args, Options(dry_run=args.dry_run, yes=args.yes, config_path=args.config, message=args.message, color=color)
+    if args.no_cleanup:
+        cleanup: bool | None = False
+    elif args.cleanup:
+        cleanup = True
+    else:
+        cleanup = None
+    return args, Options(
+        dry_run=args.dry_run,
+        yes=args.yes,
+        config_path=args.config,
+        message=args.message,
+        color=color,
+        no_sweep=args.no_sweep,
+        integrate=args.integrate,
+        pipeline_order=args.pipeline_order,
+        cleanup=cleanup,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

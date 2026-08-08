@@ -13,6 +13,9 @@ sys.path.insert(0, str(SCRIPTS))
 
 import supagit_inventory
 import supagit_layout
+import supagit_menu
+from supagit_inventory import BranchInfo, RepoInventory
+from supagit_layout import RepoLayout
 
 
 def _run(cwd: Path, *args: str) -> str:
@@ -107,6 +110,56 @@ branch refs/heads/feature/x
             self.assertIn("feature/x", names)
             self.assertFalse(names["feature/x"].is_pipeline)
             self.assertFalse(names["feature/x"].contained_in_first)
+
+
+def _fake_inventory() -> RepoInventory:
+    layout = RepoLayout(
+        launch_root=Path("/repo"),
+        main_root=Path("/repo"),
+        common_dir=Path("/repo/.git"),
+        is_linked_launch=False,
+    )
+    branches = (
+        BranchInfo("dev", True, True, Path("/repo"), 0, 0, True, "origin/dev", False),
+        BranchInfo("pre", True, False, None, 0, 0, False, "origin/pre", False),
+        BranchInfo("prod", True, False, None, 0, 0, False, "origin/prod", False),
+        BranchInfo("feature/x", False, True, Path("/wt"), 1, 0, False, None, True),
+        BranchInfo("old", False, False, None, 0, 0, True, None, False),
+    )
+    return RepoInventory(layout, (), branches, "dev")
+
+
+class MenuTests(unittest.TestCase):
+    def test_defaults_skip_contained_features(self) -> None:
+        inv = _fake_inventory()
+        selection = supagit_menu.parse_menu_responses(
+            inv, pipeline_line="", integrate_line="", default_pipeline=("dev", "pre", "prod")
+        )
+        self.assertEqual(selection.pipeline, ("dev", "pre", "prod"))
+        self.assertEqual(selection.integrate, ("feature/x",))
+
+    def test_numbers_reorder_pipeline_and_pick_features(self) -> None:
+        inv = _fake_inventory()
+        selection = supagit_menu.parse_menu_responses(
+            inv,
+            pipeline_line="1,3,2",
+            integrate_line="4",
+            default_pipeline=("dev", "pre", "prod"),
+        )
+        self.assertEqual(selection.pipeline, ("dev", "prod", "pre"))
+        self.assertEqual(selection.integrate, ("feature/x",))
+
+    def test_yes_mode_flags_parser(self) -> None:
+        inv = _fake_inventory()
+        selection = supagit_menu.selection_from_flags(inv, "dev,pre,prod", "feature/x")
+        self.assertEqual(selection.integrate, ("feature/x",))
+
+    def test_integrate_none(self) -> None:
+        inv = _fake_inventory()
+        selection = supagit_menu.parse_menu_responses(
+            inv, "", "none", default_pipeline=("dev", "pre", "prod")
+        )
+        self.assertEqual(selection.integrate, ())
 
 
 if __name__ == "__main__":
