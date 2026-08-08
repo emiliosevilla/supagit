@@ -31,6 +31,7 @@ set -eu
 
 global_skill_dir="${HOME}/.agents/skills/supagit"
 global_source_root=""
+source_marker_needs_install=true
 colour_enabled=true
 for arg in "$@"; do
   case "$arg" in
@@ -55,6 +56,15 @@ colour_line() {
 
 if [ -f "$global_skill_dir/source-root" ]; then
   global_source_root=$(sed -n '1p' "$global_skill_dir/source-root")
+  if [ -n "$global_source_root" ] \
+    && { [ ! -x "$global_source_root/scripts/install-supagit-global.sh" ] \
+      || [ ! -f "$global_source_root/scripts/supagit.py" ] \
+      || [ ! -f "$global_source_root/scripts/supagit" ] \
+      || [ ! -f "$global_source_root/docs/supagit-agent-command.md" ]; }; then
+    global_source_root=""
+  else
+    source_marker_needs_install=false
+  fi
 fi
 if [ -z "$global_source_root" ] \
   && [ -f "scripts/install-supagit-global.sh" ] \
@@ -67,7 +77,7 @@ if [ -n "$global_source_root" ] \
   && [ -f "$global_source_root/scripts/supagit.py" ] \
   && [ -f "$global_source_root/scripts/supagit" ] \
   && [ -f "$global_source_root/docs/supagit-agent-command.md" ]; then
-  needs_install=false
+  needs_install=$source_marker_needs_install
   if ! cmp -s "$global_source_root/scripts/supagit.py" "$global_skill_dir/supagit.py" \
     || ! cmp -s "$global_source_root/scripts/supagit" "$global_skill_dir/supagit" \
     || ! cmp -s "$global_source_root/docs/supagit-agent-command.md" "$global_skill_dir/SKILL.md"; then

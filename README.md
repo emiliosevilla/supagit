@@ -1,8 +1,6 @@
 # supagit
 
-`supagit` is a fail-closed promotion pipeline for projects that publish code
-through an ordered sequence of Git branches. These projects may have, or not,
-a backend consisting on Supabase environments. 
+`supagit` is a fail-closed promotion pipeline for projects that publish code through an ordered sequence of Git branches. These projects may, or may not, have a backend consisting on Supabase environments. 
 
 The bash command, installer, and tests live in [`scripts/`](scripts/).
 The project configuration template is [`.supagit.json.example`](.supagit.json.example), and
