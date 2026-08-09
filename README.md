@@ -99,6 +99,10 @@ layout, for example `supagit init --backend none --branches main`.
 
 ## Running
 
+You may run `supagit` from the main repository or from a linked worktree.
+When launched from a linked worktree, promotion uses the main checkout; the
+launch path is printed at startup.
+
 Always inspect the plan first:
 
 ```bash
@@ -111,10 +115,50 @@ Then run the confirmed pipeline:
 scripts/supagit
 ```
 
+### Sweeper (default)
+
+Unless `--no-sweep` is passed, an interactive menu selects for **this run
+only** (not persisted):
+
+1. **Pipeline order** — promotion branches (default: configured branches).
+2. **Integrate** — local feature branches to merge into the first pipeline
+   branch before promotion (default: eligible locals; `none` skips).
+
+Selected features are integrated through GitHub pull requests merged into the
+first pipeline branch. The `gh` CLI must be installed and authenticated. Dirty
+feature worktrees are committed and pushed first.
+
+After integration (or when integrate is empty), the main checkout is placed on
+the first pipeline branch and that branch is fast-forward synced with its
+remote (ff-only; diverged histories stop the run).
+
+### Promotion
+
 The pipeline publishes local changes on the first branch, runs configured
 checks, migrates the backend configured for each destination branch when
 present, promotes each adjacent branch pair, and returns to the first branch.
-It requires the main checkout and stops on errors or inconsistencies.
+
+### Flags
+
+| Flag | Effect |
+|------|--------|
+| `--dry-run` | Print the plan without mutating Git or Supabase. |
+| `--no-sweep` | Skip menu and feature integration; still relocate to main checkout when needed and ff-only sync the first branch. |
+| `--integrate` | Comma-separated feature branches, or `none` (non-interactive). |
+| `--pipeline` | Comma-separated ordered pipeline branches (non-interactive). |
+| `--yes` | Skip confirmations; requires `--integrate` and `--pipeline` unless `--no-sweep`. |
+| `--cleanup` | Apply optional post-run cleanup without prompting (use with `--yes`). |
+| `--no-cleanup` | Skip optional cleanup of merged features and worktrees. |
+| `-m` / `--message` | Commit message for the first branch; required with `--yes` when changes exist. |
+
+Optional cleanup at the end removes merged feature branches and linked
+worktrees when confirmed interactively, or when `--cleanup` is passed.
+
+### Optional sweep configuration
+
+`.supagit.json` may include an optional `sweep` block (see
+[`.supagit.json.example`](.supagit.json.example)). When absent, feature
+integration uses GitHub merge commits via `gh` and requires `gh` to be available.
 
 ## Output and safety
 
@@ -124,3 +168,6 @@ It requires the main checkout and stops on errors or inconsistencies.
 - `NO_COLOR` and `--no-color` disable color; `--color always` forces it.
 - The command never uses forced Git operations and does not infer an ambiguous
   deployment target.
+- Agents must measure layout, worktrees, and status; run `--dry-run` first; and
+  obtain explicit confirmation before a mutating run. See
+  [`docs/supagit-agent-command.md`](docs/supagit-agent-command.md).

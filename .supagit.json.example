@@ -23,5 +23,9 @@
       }
     }
   },
-  "checks": []
+  "checks": [],
+  "sweep": {
+    "pr_merge_method": "merge",
+    "require_gh": true
+  }
 }
