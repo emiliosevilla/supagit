@@ -24,6 +24,7 @@ install -m 755 "$repo_root/scripts/supagit.py" "$global_skill_dir/supagit.py"
 install -m 644 "$repo_root/scripts/supagit_layout.py" "$global_skill_dir/supagit_layout.py"
 install -m 644 "$repo_root/scripts/supagit_inventory.py" "$global_skill_dir/supagit_inventory.py"
 install -m 644 "$repo_root/scripts/supagit_menu.py" "$global_skill_dir/supagit_menu.py"
+install -m 644 "$repo_root/scripts/supagit_sweep.py" "$global_skill_dir/supagit_sweep.py"
 install -m 755 "$repo_root/scripts/supagit" "$global_skill_dir/supagit"
 install -m 644 "$repo_root/docs/supagit-agent-command.md" "$global_skill_dir/SKILL.md"
 printf '%s\n' "$repo_root" > "$source_marker"
@@ -65,6 +66,7 @@ if [ -f "$global_skill_dir/source-root" ]; then
       || [ ! -f "$global_source_root/scripts/supagit_layout.py" ] \
       || [ ! -f "$global_source_root/scripts/supagit_inventory.py" ] \
       || [ ! -f "$global_source_root/scripts/supagit_menu.py" ] \
+      || [ ! -f "$global_source_root/scripts/supagit_sweep.py" ] \
       || [ ! -f "$global_source_root/scripts/supagit" ] \
       || [ ! -f "$global_source_root/docs/supagit-agent-command.md" ]; }; then
     global_source_root=""
@@ -84,6 +86,7 @@ if [ -n "$global_source_root" ] \
   && [ -f "$global_source_root/scripts/supagit_layout.py" ] \
   && [ -f "$global_source_root/scripts/supagit_inventory.py" ] \
   && [ -f "$global_source_root/scripts/supagit_menu.py" ] \
+  && [ -f "$global_source_root/scripts/supagit_sweep.py" ] \
   && [ -f "$global_source_root/scripts/supagit" ] \
   && [ -f "$global_source_root/docs/supagit-agent-command.md" ]; then
   needs_install=$source_marker_needs_install
@@ -91,6 +94,7 @@ if [ -n "$global_source_root" ] \
     || ! cmp -s "$global_source_root/scripts/supagit_layout.py" "$global_skill_dir/supagit_layout.py" \
     || ! cmp -s "$global_source_root/scripts/supagit_inventory.py" "$global_skill_dir/supagit_inventory.py" \
     || ! cmp -s "$global_source_root/scripts/supagit_menu.py" "$global_skill_dir/supagit_menu.py" \
+    || ! cmp -s "$global_source_root/scripts/supagit_sweep.py" "$global_skill_dir/supagit_sweep.py" \
     || ! cmp -s "$global_source_root/scripts/supagit" "$global_skill_dir/supagit" \
     || ! cmp -s "$global_source_root/docs/supagit-agent-command.md" "$global_skill_dir/SKILL.md"; then
     needs_install=true

@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 import supagit_inventory
 import supagit_layout
 import supagit_menu
+import supagit_sweep
 from supagit_inventory import BranchInfo, RepoInventory
 from supagit_layout import RepoLayout
 
@@ -127,6 +128,104 @@ def _fake_inventory() -> RepoInventory:
         BranchInfo("old", False, False, None, 0, 0, True, None, False),
     )
     return RepoInventory(layout, (), branches, "dev")
+
+
+class FfSyncTests(unittest.TestCase):
+    def test_ff_when_remote_ahead(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            remote = Path(directory) / "remote.git"
+            local = Path(directory) / "local"
+            _run(Path(directory), "git", "init", "--bare", str(remote))
+            _run(Path(directory), "git", "clone", str(remote), str(local))
+            _run(local, "git", "checkout", "-b", "dev")
+            _run(local, "git", "config", "user.email", "t@example.com")
+            _run(local, "git", "config", "user.name", "t")
+            (local / "a").write_text("1\n", encoding="utf-8")
+            _run(local, "git", "add", "a")
+            _run(local, "git", "commit", "-m", "one")
+            _run(local, "git", "push", "-u", "origin", "dev")
+
+            other = Path(directory) / "other"
+            _run(Path(directory), "git", "clone", str(remote), str(other))
+            _run(other, "git", "checkout", "dev")
+            _run(other, "git", "config", "user.email", "t@example.com")
+            _run(other, "git", "config", "user.name", "t")
+            (other / "a").write_text("2\n", encoding="utf-8")
+            _run(other, "git", "add", "a")
+            _run(other, "git", "commit", "-m", "two")
+            _run(other, "git", "push", "origin", "dev")
+
+            def run_git(*args: str, cwd: Path | None = None, capture: bool = True) -> str:
+                completed = subprocess.run(
+                    ["git", *args],
+                    cwd=str(cwd or local),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                if completed.returncode != 0:
+                    raise RuntimeError(completed.stderr)
+                return completed.stdout.strip()
+
+            result = supagit_sweep.ff_sync_branch(run_git, "dev", "origin", dry_run=False)
+            self.assertTrue(result.changed)
+            self.assertEqual(run_git("rev-parse", "dev"), run_git("rev-parse", "origin/dev"))
+
+    def test_diverge_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _run(root, "git", "init", "-b", "dev")
+            _run(root, "git", "config", "user.email", "t@example.com")
+            _run(root, "git", "config", "user.name", "t")
+            (root / "a").write_text("1\n", encoding="utf-8")
+            _run(root, "git", "add", "a")
+            _run(root, "git", "commit", "-m", "base")
+            _run(root, "git", "branch", "remote-dev")
+            (root / "a").write_text("local\n", encoding="utf-8")
+            _run(root, "git", "add", "a")
+            _run(root, "git", "commit", "-m", "local")
+            _run(root, "git", "checkout", "remote-dev")
+            (root / "a").write_text("remote\n", encoding="utf-8")
+            _run(root, "git", "add", "a")
+            _run(root, "git", "commit", "-m", "remote")
+            _run(root, "git", "update-ref", "refs/remotes/origin/dev", "remote-dev")
+            _run(root, "git", "checkout", "dev")
+
+            def run_git(*args: str, cwd: Path | None = None, capture: bool = True) -> str:
+                completed = subprocess.run(
+                    ["git", *args],
+                    cwd=str(root),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                if completed.returncode != 0:
+                    raise RuntimeError(completed.stderr)
+                return completed.stdout.strip()
+
+            with self.assertRaises(supagit_sweep.SweepError):
+                supagit_sweep.ff_sync_branch(run_git, "dev", "origin", dry_run=False)
+
+    def test_fetch_failure_with_configured_remote_raises(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def run_git(*args: str, cwd=None, capture: bool = True) -> str:
+            calls.append(tuple(args))
+            if args[:2] == ("fetch", "origin"):
+                raise RuntimeError("network down")
+            if args == ("remote", "get-url", "origin"):
+                return "https://example.com/repo.git"
+            if args == ("rev-parse", "dev"):
+                return "abc123"
+            if args == ("rev-list", "--left-right", "--count", "origin/dev...dev"):
+                return "1\t0"
+            raise AssertionError(f"unexpected git call: {args}")
+
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
+            supagit_sweep.ff_sync_branch(run_git, "dev", "origin", dry_run=False)
+        self.assertIn("Could not fetch origin/dev", str(ctx.exception))
+        self.assertEqual(calls[0][:2], ("fetch", "origin"))
+        self.assertIn(("remote", "get-url", "origin"), calls)
 
 
 class MenuTests(unittest.TestCase):
