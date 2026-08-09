@@ -16,7 +16,7 @@ import supagit_inventory
 import supagit_layout
 import supagit_menu
 import supagit_sweep
-from supagit_inventory import BranchInfo, RepoInventory
+from supagit_inventory import BranchInfo, RepoInventory, WorktreeInfo
 from supagit_layout import RepoLayout
 
 
@@ -473,6 +473,35 @@ class IntegrateBranchTests(unittest.TestCase):
             )
 
 
+class CleanupTests(unittest.TestCase):
+    def test_plan_skips_pipeline_and_dirty_worktrees(self) -> None:
+        layout = RepoLayout(
+            launch_root=Path("/repo"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=False,
+        )
+        worktrees = (
+            WorktreeInfo(Path("/repo"), "dev", True, ()),
+            WorktreeInfo(Path("/wt-dirty"), "feature/x", False, ("a.txt",)),
+            WorktreeInfo(Path("/wt-clean"), "feature/y", False, ()),
+        )
+        branches = (
+            BranchInfo("dev", True, True, Path("/repo"), 0, 0, True, "origin/dev", False),
+            BranchInfo("pre", True, False, None, 0, 0, False, "origin/pre", False),
+            BranchInfo("prod", True, False, None, 0, 0, False, "origin/prod", False),
+            BranchInfo("feature/x", False, True, Path("/wt-dirty"), 0, 0, True, None, True),
+            BranchInfo("feature/y", False, True, Path("/wt-clean"), 0, 0, True, None, False),
+        )
+        inv = RepoInventory(layout, worktrees, branches, "dev")
+        plan = supagit_sweep.plan_cleanup(inv, ("dev", "pre", "prod"), ("feature/x", "feature/y"))
+        kinds = {(i.kind, i.name) for i in plan.items}
+        self.assertNotIn(("local-branch", "dev"), kinds)
+        self.assertNotIn(("worktree", "feature/x"), kinds)
+        self.assertIn(("worktree", "feature/y"), kinds)
+        self.assertIn(("local-branch", "feature/y"), kinds)
+
+
 SPEC = importlib.util.spec_from_file_location("supagit_engine", SCRIPTS / "supagit.py")
 assert SPEC and SPEC.loader
 ENGINE = importlib.util.module_from_spec(SPEC)
@@ -532,6 +561,42 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.validate_workspace = fail_if_called  # type: ignore[method-assign]
         with self.assertRaisesRegex(ENGINE.ShipError, "--integrate"):
             pipeline.run()
+
+    def test_optional_cleanup_rebuilds_inventory(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=False,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=True,
+        )
+        stale_inventory = object()
+        fresh_layout = RepoLayout(
+            launch_root=Path("/repo"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=False,
+        )
+        fresh_inventory = RepoInventory(fresh_layout, (), (), "dev")
+        rebuilt = False
+
+        def build_inventory() -> RepoInventory:
+            nonlocal rebuilt
+            rebuilt = True
+            return fresh_inventory
+
+        pipeline.build_inventory = build_inventory  # type: ignore[method-assign]
+        pipeline._sweep_git = lambda *a, **k: ""  # type: ignore[method-assign]
+        selection = supagit_menu.MenuSelection(
+            integrate=("feature/y",), pipeline=("dev", "pre", "prod")
+        )
+        pipeline.optional_cleanup(stale_inventory, selection)  # type: ignore[arg-type]
+        self.assertTrue(rebuilt)
 
 
 if __name__ == "__main__":

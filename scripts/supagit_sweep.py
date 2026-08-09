@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from supagit_inventory import RepoInventory
+
 GitRunner = Callable[..., str]
 RejectSensitive = Callable[[Sequence[str]], None]
 
@@ -20,6 +22,18 @@ class SyncResult:
     changed: bool
     before: str
     after: str
+
+
+@dataclass(frozen=True)
+class CleanupItem:
+    kind: str
+    name: str
+    path: Path | None
+
+
+@dataclass(frozen=True)
+class CleanupPlan:
+    items: tuple[CleanupItem, ...]
 
 
 def ahead_behind(run_git: GitRunner, local: str, remote_ref: str) -> tuple[int, int]:
@@ -308,3 +322,60 @@ def integrate_branch(
         )
     except Exception as exc:
         raise SweepError(f"Could not fetch {remote}/{base} after merge.") from exc
+
+
+def plan_cleanup(
+    inventory: RepoInventory,
+    pipeline: Sequence[str],
+    merged_features: Sequence[str],
+) -> CleanupPlan:
+    pipeline_set = set(pipeline)
+    merged_set = set(merged_features)
+
+    eligible: set[str] = set()
+    for branch in inventory.branches:
+        if branch.is_pipeline or branch.name in pipeline_set:
+            continue
+        if branch.contained_in_first or branch.name in merged_set:
+            eligible.add(branch.name)
+
+    items: list[CleanupItem] = []
+
+    for worktree in inventory.worktrees:
+        branch_name = worktree.branch
+        if branch_name is None or branch_name in pipeline_set:
+            continue
+        if branch_name not in eligible or worktree.dirty_paths:
+            continue
+        items.append(CleanupItem(kind="worktree", name=branch_name, path=worktree.path))
+
+    for branch in inventory.branches:
+        if branch.is_pipeline or branch.name in pipeline_set:
+            continue
+        if branch.name not in eligible or branch.dirty:
+            continue
+        items.append(CleanupItem(kind="local-branch", name=branch.name, path=None))
+
+    return CleanupPlan(items=tuple(items))
+
+
+def apply_cleanup(
+    run_git: GitRunner,
+    plan: CleanupPlan,
+    *,
+    dry_run: bool,
+) -> None:
+    worktrees = [item for item in plan.items if item.kind == "worktree"]
+    branches = [item for item in plan.items if item.kind == "local-branch"]
+
+    for item in worktrees:
+        if dry_run:
+            continue
+        if item.path is None:
+            continue
+        run_git("worktree", "remove", str(item.path))
+
+    for item in branches:
+        if dry_run:
+            continue
+        run_git("branch", "-d", item.name)

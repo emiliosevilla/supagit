@@ -973,7 +973,23 @@ class Pipeline:
             raise ShipError(str(exc)) from exc
 
     def optional_cleanup(self, inventory: RepoInventory, selection: MenuSelection) -> None:
-        pass
+        if self.options.cleanup is False:
+            return
+        inventory = self.build_inventory()
+        plan = supagit_sweep.plan_cleanup(
+            inventory, selection.pipeline, selection.integrate
+        )
+        if not plan.items:
+            print("Cleanup: nothing safe to remove.")
+            return
+        print("Cleanup candidates:")
+        for item in plan.items:
+            print(f"  - {item.kind}: {item.name} {item.path or ''}")
+        if self.options.cleanup is None:
+            self.confirm("Apply optional cleanup of merged features/worktrees?")
+        elif self.options.yes and self.options.cleanup is True:
+            pass
+        supagit_sweep.apply_cleanup(self._sweep_git, plan, dry_run=self.options.dry_run)
 
     def run(self) -> None:
         if not self.options.no_sweep:
