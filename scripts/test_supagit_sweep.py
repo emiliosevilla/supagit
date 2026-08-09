@@ -113,6 +113,61 @@ branch refs/heads/feature/x
             self.assertFalse(names["feature/x"].is_pipeline)
             self.assertFalse(names["feature/x"].contained_in_first)
 
+    def test_branch_contained_treats_runner_exception_as_false(self) -> None:
+        class FakeShipError(RuntimeError):
+            pass
+
+        def failing_git(*args: str, **kwargs) -> str:
+            if len(args) >= 2 and args[0] == "merge-base" and args[1] == "--is-ancestor":
+                raise FakeShipError("Command failed: git merge-base --is-ancestor feature/x dev")
+            raise AssertionError(f"unexpected git call: {args}")
+
+        self.assertFalse(
+            supagit_inventory.branch_contained("feature/x", "dev", failing_git)
+        )
+
+    def test_build_inventory_survives_ship_error_merge_base(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _run(root, "git", "init", "-b", "dev")
+            _run(root, "git", "config", "user.email", "t@example.com")
+            _run(root, "git", "config", "user.name", "t")
+            (root / "README").write_text("x\n", encoding="utf-8")
+            _run(root, "git", "add", "README")
+            _run(root, "git", "commit", "-m", "init")
+            _run(root, "git", "checkout", "-b", "feature/x")
+            (root / "README").write_text("y\n", encoding="utf-8")
+            _run(root, "git", "add", "README")
+            _run(root, "git", "commit", "-m", "feat")
+            _run(root, "git", "checkout", "dev")
+
+            layout = supagit_layout.resolve_repo_layout(root)
+
+            def run_git(*args: str, cwd: Path | None = None, capture: bool = True) -> str:
+                completed = subprocess.run(
+                    ["git", *args],
+                    cwd=str(cwd or root),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                return completed.stdout if capture else ""
+
+            def ship_error_git(*args: str, cwd: Path | None = None, capture: bool = True) -> str:
+                if len(args) >= 2 and args[0] == "merge-base" and args[1] == "--is-ancestor":
+                    raise RuntimeError(
+                        "Command failed: git merge-base --is-ancestor feature/x dev: not an ancestor"
+                    )
+                return run_git(*args, cwd=cwd, capture=capture)
+
+            inv = supagit_inventory.build_inventory(
+                layout, ("dev", "pre", "prod"), "origin", git_runner=ship_error_git
+            )
+            names = {b.name: b for b in inv.branches}
+            self.assertIn("feature/x", names)
+            self.assertFalse(names["feature/x"].contained_in_first)
+
 
 def _fake_inventory() -> RepoInventory:
     layout = RepoLayout(
@@ -597,6 +652,154 @@ class OrchestrationTests(unittest.TestCase):
         )
         pipeline.optional_cleanup(stale_inventory, selection)  # type: ignore[arg-type]
         self.assertTrue(rebuilt)
+
+    def test_run_rebuilds_inventory_after_menu_selection(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message="test",
+            color="never",
+            no_sweep=False,
+            integrate=("feature/x",),
+            pipeline_order="pre,dev,prod",
+            cleanup=False,
+        )
+        pipeline.branches = ("dev", "pre", "prod")
+        pipeline.dev = "dev"
+        pipeline.pre = "pre"
+        pipeline.prod = "prod"
+        pipeline.remote = "origin"
+        pipeline.backend = ENGINE.BackendConfig(provider="none", cli=None, targets={})
+        call_branches: list[tuple[str, ...]] = []
+        sweep_inventory: list[RepoInventory] = []
+
+        def build_inventory() -> RepoInventory:
+            call_branches.append(tuple(pipeline.branches))
+            base = _fake_inventory()
+            return RepoInventory(
+                base.layout, base.worktrees, base.branches, pipeline.branches[0]
+            )
+
+        def sweep_features(selection: supagit_menu.MenuSelection, inventory: RepoInventory) -> None:
+            sweep_inventory.append(inventory)
+
+        pipeline.build_inventory = build_inventory  # type: ignore[method-assign]
+        pipeline.validate_workspace = lambda: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        pipeline.run_branch_menu = lambda inv: supagit_menu.MenuSelection(  # type: ignore[method-assign]
+            integrate=("feature/x",), pipeline=("pre", "dev", "prod")
+        )
+        pipeline.ensure_main_checkout_for_promotion = lambda: None  # type: ignore[method-assign]
+        pipeline.sweep_features = sweep_features  # type: ignore[method-assign]
+        pipeline.ff_sync_first_branch = lambda: None  # type: ignore[method-assign]
+        pipeline.commit_and_publish_dev = lambda: None  # type: ignore[method-assign]
+        pipeline._assert_dev_synced = lambda: None  # type: ignore[method-assign]
+        pipeline.run_checks = lambda: None  # type: ignore[method-assign]
+        pipeline.validate_clean_after_checks = lambda: None  # type: ignore[method-assign]
+        pipeline.confirm = lambda message: None  # type: ignore[method-assign]
+        pipeline.promote = lambda source, target: None  # type: ignore[method-assign]
+        pipeline.return_to_dev = lambda: None  # type: ignore[method-assign]
+        pipeline.optional_cleanup = lambda inv, sel: None  # type: ignore[method-assign]
+        pipeline.status = lambda message, color: None  # type: ignore[method-assign]
+
+        pipeline.run()
+
+        self.assertGreaterEqual(len(call_branches), 2)
+        self.assertEqual(call_branches[0], ("dev", "pre", "prod"))
+        self.assertEqual(call_branches[1], ("pre", "dev", "prod"))
+        self.assertEqual(len(sweep_inventory), 1)
+        self.assertEqual(sweep_inventory[0].first_branch, "pre")
+
+    def test_validate_linked_launch_defers_clean_wrong_branch(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=False,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.layout = RepoLayout(
+            launch_root=Path("/wt"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=True,
+        )
+        pipeline.launch_root = Path("/wt")
+        pipeline.root = Path("/repo")
+        pipeline.dev = "dev"
+        pipeline.branches = ("dev", "pre", "prod")
+        pipeline.remote = "origin"
+        pipeline.original_branch = "feature/x"
+        pipeline.project_name = "demo"
+        checkout_calls: list[tuple[str, ...]] = []
+
+        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+            if args[:2] == ("branch", "--show-current"):
+                target = cwd or pipeline.root
+                return "feature/x\n" if target == pipeline.root else "feature/x\n"
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[0] == "checkout":
+                checkout_calls.append(args)
+                return ""
+            if args[:2] == ("remote", "get-url"):
+                return "git@github.com:acme/demo.git\n"
+            if args[:2] == ("worktree", "list"):
+                return "worktree /repo\nbranch refs/heads/feature/x\n\nworktree /wt\nbranch refs/heads/feature/x\n"
+            if args[0] == "ls-remote":
+                return ""
+            if args[0] == "fetch":
+                return ""
+            if args[:2] == ("rev-list", "--left-right"):
+                return "0\t0\n"
+            raise AssertionError(f"unexpected git call: {args}")
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline.validate_workspace()
+        self.assertEqual(checkout_calls, [])
+
+    def test_validate_linked_launch_fails_dirty_wrong_branch(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=False,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.layout = RepoLayout(
+            launch_root=Path("/wt"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=True,
+        )
+        pipeline.launch_root = Path("/wt")
+        pipeline.root = Path("/repo")
+        pipeline.dev = "dev"
+        pipeline.branches = ("dev", "pre", "prod")
+        pipeline.remote = "origin"
+
+        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+            if args[:2] == ("branch", "--show-current"):
+                return "feature/x\n"
+            if args[:2] == ("status", "--porcelain"):
+                return " M dirty.txt\n"
+            raise AssertionError(f"unexpected git call: {args}")
+
+        pipeline.git = git  # type: ignore[method-assign]
+        with self.assertRaisesRegex(ENGINE.ShipError, "uncommitted changes"):
+            pipeline.validate_workspace()
 
 
 if __name__ == "__main__":

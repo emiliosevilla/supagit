@@ -626,10 +626,12 @@ class Pipeline:
             )
             current_main = self.git("branch", "--show-current", capture=True, cwd=self.root).strip()
             if current_main != self.dev:
-                raise ShipError(
-                    f"Main checkout must be on {self.dev} (currently {current_main or 'detached'}). "
-                    f"Launch path was {self.launch_root}."
-                )
+                status = self.git("status", "--porcelain", capture=True, cwd=self.root)
+                if status.strip():
+                    raise ShipError(
+                        f"Main checkout must be on {self.dev} (currently {current_main or 'detached'}) "
+                        f"but the working tree has uncommitted changes. Launch path was {self.launch_root}."
+                    )
         elif self.original_branch != self.dev:
             raise ShipError(
                 f"Wrong checkout: currently on {self.original_branch or '(detached HEAD)'}, "
@@ -1002,6 +1004,7 @@ class Pipeline:
             selection = self.run_branch_menu(inventory)
         self.apply_menu_selection(selection)
         self.ensure_main_checkout_for_promotion()
+        inventory = self.build_inventory()
         if selection.integrate:
             self.sweep_features(selection, inventory)
         self.ff_sync_first_branch()

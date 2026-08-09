@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -9,6 +8,14 @@ from typing import Callable, Sequence
 from supagit_layout import RepoLayout
 
 GitRunner = Callable[..., str]
+
+
+def _git_ok(git_runner: GitRunner, *args: str, **kwargs) -> bool:
+    try:
+        git_runner(*args, **kwargs)
+        return True
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -61,19 +68,18 @@ def parse_worktree_porcelain(text: str) -> list[dict[str, str | None]]:
 
 
 def branch_contained(needle: str, haystack: str, git_runner: GitRunner) -> bool:
-    try:
-        git_runner("merge-base", "--is-ancestor", needle, haystack, capture=True)
-        return True
-    except subprocess.CalledProcessError:
-        return False
+    return _git_ok(
+        git_runner,
+        "merge-base",
+        "--is-ancestor",
+        needle,
+        haystack,
+        capture=True,
+    )
 
 
 def _ref_exists(ref: str, git_runner: GitRunner, cwd: Path) -> bool:
-    try:
-        git_runner("rev-parse", "--verify", ref, cwd=cwd, capture=True)
-        return True
-    except subprocess.CalledProcessError:
-        return False
+    return _git_ok(git_runner, "rev-parse", "--verify", ref, cwd=cwd, capture=True)
 
 
 def _upstream_name(branch: str, git_runner: GitRunner, cwd: Path) -> str | None:
@@ -87,7 +93,7 @@ def _upstream_name(branch: str, git_runner: GitRunner, cwd: Path) -> str | None:
         ).strip()
         if upstream and upstream != f"{branch}@{{upstream}}":
             return upstream
-    except subprocess.CalledProcessError:
+    except Exception:
         pass
     return None
 
