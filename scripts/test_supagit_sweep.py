@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Callable, Sequence
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
@@ -259,6 +260,217 @@ class MenuTests(unittest.TestCase):
             inv, "", "none", default_pipeline=("dev", "pre", "prod")
         )
         self.assertEqual(selection.integrate, ())
+
+
+class GhClientTests(unittest.TestCase):
+    def test_ensure_ready_fails_when_gh_missing(self) -> None:
+        def run_raw(cmd, **kwargs):
+            raise FileNotFoundError("gh")
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with self.assertRaises(supagit_sweep.SweepError):
+            client.ensure_ready()
+
+    def test_ensure_ready_fails_when_gh_unauthenticated(self) -> None:
+        def run_raw(cmd, **kwargs):
+            raise RuntimeError("not logged in")
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with self.assertRaises(supagit_sweep.SweepError):
+            client.ensure_ready()
+
+    def test_ensure_github_remote_rejects_non_github(self) -> None:
+        client = supagit_sweep.GhClient(lambda *a, **k: "", dry_run=False)
+        with self.assertRaises(supagit_sweep.SweepError):
+            client.ensure_github_remote("git@gitlab.com:acme/demo.git")
+
+    def test_ensure_github_remote_accepts_github_ssh(self) -> None:
+        client = supagit_sweep.GhClient(lambda *a, **k: "", dry_run=False)
+        client.ensure_github_remote("git@github.com:acme/demo.git")
+
+    def test_ensure_github_remote_accepts_github_https(self) -> None:
+        client = supagit_sweep.GhClient(lambda *a, **k: "", dry_run=False)
+        client.ensure_github_remote("https://github.com/acme/demo.git")
+
+    def test_merge_pr_uses_merge_and_delete_branch(self) -> None:
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            return ""
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        client.merge_pr(42)
+        self.assertEqual(
+            calls[0],
+            ["gh", "pr", "merge", "42", "--merge", "--delete-branch"],
+        )
+
+
+class CommitDirtyTreeTests(unittest.TestCase):
+    def test_secret_rejection_short_circuits_before_commit(self) -> None:
+        calls: list[list[str]] = []
+
+        def reject_sensitive(paths: Sequence[str]) -> None:
+            calls.append(list(paths))
+            raise ValueError("secrets")
+
+        def run_git(*args, cwd=None, capture=True):
+            if args[:2] == ("status", "--porcelain"):
+                return " M .env\n"
+            raise AssertionError(f"should not proceed past secret check: {args}")
+
+        with self.assertRaises(ValueError):
+            supagit_sweep.commit_dirty_tree(
+                run_git,
+                cwd=Path("/wt"),
+                message="x",
+                reject_sensitive=reject_sensitive,
+                dry_run=False,
+            )
+        self.assertEqual(len(calls), 1)
+        self.assertIn(".env", calls[0])
+
+    def test_clean_tree_returns_false(self) -> None:
+        def run_git(*args, cwd=None, capture=True):
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            raise AssertionError(f"unexpected git call: {args}")
+
+        created = supagit_sweep.commit_dirty_tree(
+            run_git,
+            cwd=Path("/wt"),
+            message="x",
+            reject_sensitive=lambda paths: None,
+            dry_run=False,
+        )
+        self.assertFalse(created)
+
+
+class IntegrateBranchTests(unittest.TestCase):
+    def test_reuses_existing_pr_and_merges(self) -> None:
+        actions: list[str] = []
+
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                actions.append("auth")
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                actions.append(f"remote:{remote_url}")
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                actions.append(f"find:{head}->{base}")
+                return 7
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                raise AssertionError("should reuse")
+
+            def merge_pr(self, number: int) -> None:
+                actions.append(f"merge:{number}")
+
+        def run_git(*args, cwd=None, capture=True):
+            actions.append("git:" + " ".join(args))
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[0] == "push":
+                return ""
+            if args[:1] == ("fetch",):
+                return ""
+            return "ok"
+
+        supagit_sweep.integrate_branch(
+            run_git,
+            gh=FakeGh(),
+            remote="origin",
+            remote_url="git@github.com:acme/demo.git",
+            branch="feature/x",
+            base="dev",
+            cwd=Path("/wt"),
+            message_provider=lambda: "should not be called",
+            reject_sensitive=lambda paths: None,
+            dry_run=False,
+            contained_in_first=False,
+        )
+        self.assertEqual(actions[0], "auth")
+        self.assertIn("merge:7", actions)
+        self.assertIn("find:feature/x->dev", actions)
+
+    def test_creates_pr_when_none_open(self) -> None:
+        actions: list[str] = []
+
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                actions.append("auth")
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                pass
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                return None
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                actions.append(f"create:{head}->{base}:{title}")
+                return 9
+
+            def merge_pr(self, number: int) -> None:
+                actions.append(f"merge:{number}")
+
+        def run_git(*args, cwd=None, capture=True):
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[0] == "push":
+                return ""
+            if args[:1] == ("fetch",):
+                return ""
+            return "ok"
+
+        supagit_sweep.integrate_branch(
+            run_git,
+            gh=FakeGh(),
+            remote="origin",
+            remote_url="git@github.com:acme/demo.git",
+            branch="feature/x",
+            base="dev",
+            cwd=Path("/wt"),
+            message_provider=lambda: "unused",
+            reject_sensitive=lambda paths: None,
+            dry_run=False,
+            contained_in_first=False,
+        )
+        self.assertIn("create:feature/x->dev:supagit: integrate feature/x into dev", actions)
+        self.assertIn("merge:9", actions)
+
+    def test_contained_branch_fails_closed(self) -> None:
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                return None
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                return None
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                return None
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                raise AssertionError("should not create")
+
+            def merge_pr(self, number: int) -> None:
+                raise AssertionError("should not merge")
+
+        with self.assertRaises(supagit_sweep.SweepError):
+            supagit_sweep.integrate_branch(
+                lambda *a, **k: "",
+                gh=FakeGh(),
+                remote="origin",
+                remote_url="git@github.com:acme/demo.git",
+                branch="old",
+                base="dev",
+                cwd=Path("/repo"),
+                message_provider=lambda: "x",
+                reject_sensitive=lambda paths: None,
+                dry_run=False,
+                contained_in_first=True,
+            )
 
 
 if __name__ == "__main__":

@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from pathlib import Path
+from typing import Callable, Sequence
 
 GitRunner = Callable[..., str]
+RejectSensitive = Callable[[Sequence[str]], None]
+
+PR_BODY = "Integrated by supagit sweeper."
 
 
 class SweepError(RuntimeError):
@@ -109,3 +113,198 @@ def ff_sync_branch(
             f"tip {after} does not match {remote_ref} ({remote_tip})."
         )
     return SyncResult(True, before, after)
+
+
+class GhClient:
+    def __init__(self, run_raw: Callable[..., str], *, dry_run: bool) -> None:
+        self._run_raw = run_raw
+        self._dry_run = dry_run
+
+    def ensure_ready(self) -> None:
+        if self._dry_run:
+            return
+        try:
+            self._run_raw(["gh", "auth", "status"])
+        except FileNotFoundError as exc:
+            raise SweepError("GitHub CLI (gh) is not installed or not on PATH.") from exc
+        except Exception as exc:
+            raise SweepError("GitHub CLI (gh) is not authenticated.") from exc
+
+    def ensure_github_remote(self, remote_url: str) -> None:
+        normalized = remote_url.lower()
+        if "github.com" not in normalized:
+            raise SweepError(f"Remote is not GitHub: {remote_url}")
+
+    def find_open_pr(self, head: str, base: str) -> int | None:
+        if self._dry_run:
+            return None
+        output = self._run_raw(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                head,
+                "--base",
+                base,
+                "--state",
+                "open",
+                "--json",
+                "number",
+                "--jq",
+                ".[0].number",
+            ]
+        ).strip()
+        if not output or output == "null":
+            return None
+        return int(output)
+
+    def create_pr(self, head: str, base: str, title: str) -> int:
+        if self._dry_run:
+            return 0
+        output = self._run_raw(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--base",
+                base,
+                "--head",
+                head,
+                "--title",
+                title,
+                "--body",
+                PR_BODY,
+                "--json",
+                "number",
+                "--jq",
+                ".number",
+            ]
+        ).strip()
+        if not output:
+            raise SweepError(f"Could not create pull request for {head} into {base}.")
+        return int(output)
+
+    def merge_pr(self, number: int) -> None:
+        if self._dry_run:
+            return
+        self._run_raw(
+            ["gh", "pr", "merge", str(number), "--merge", "--delete-branch"]
+        )
+
+
+def commit_dirty_tree(
+    run_git: GitRunner,
+    *,
+    cwd: Path,
+    message: str,
+    reject_sensitive: RejectSensitive,
+    dry_run: bool,
+) -> bool:
+    status = run_git("status", "--porcelain", cwd=cwd)
+    if not status.strip():
+        return False
+
+    status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
+    reject_sensitive(status_paths)
+
+    if dry_run:
+        return True
+
+    run_git("add", "-A", cwd=cwd)
+    staged = run_git("diff", "--cached", "--name-only", cwd=cwd)
+    reject_sensitive(staged.splitlines())
+    run_git("diff", "--cached", "--check", cwd=cwd)
+    run_git("commit", "-m", message, cwd=cwd)
+    return True
+
+
+def _branch_checked_out(run_git: GitRunner, branch: str, *, cwd: Path) -> bool:
+    try:
+        current = run_git("branch", "--show-current", cwd=cwd).strip()
+    except Exception:
+        return False
+    return current == branch
+
+
+def _branch_has_upstream(run_git: GitRunner, branch: str, *, cwd: Path) -> bool:
+    try:
+        run_git("rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}", cwd=cwd)
+        return True
+    except Exception:
+        return False
+
+
+def push_branch(
+    run_git: GitRunner,
+    remote: str,
+    branch: str,
+    *,
+    cwd: Path,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        return
+
+    if _branch_checked_out(run_git, branch, cwd=cwd):
+        if _branch_has_upstream(run_git, branch, cwd=cwd):
+            run_git("push", remote, branch, cwd=cwd)
+        else:
+            run_git("push", "-u", remote, branch, cwd=cwd)
+        return
+
+    run_git("push", remote, f"{branch}:{branch}", cwd=cwd)
+
+
+def integrate_branch(
+    run_git: GitRunner,
+    *,
+    gh: GhClient,
+    remote: str,
+    remote_url: str,
+    branch: str,
+    base: str,
+    cwd: Path,
+    message_provider: Callable[[], str],
+    reject_sensitive: RejectSensitive,
+    dry_run: bool,
+    contained_in_first: bool,
+) -> None:
+    if contained_in_first:
+        raise SweepError("nothing to integrate")
+
+    gh.ensure_ready()
+    gh.ensure_github_remote(remote_url)
+
+    status = run_git("status", "--porcelain", cwd=cwd)
+    if status.strip():
+        message = message_provider()
+        commit_dirty_tree(
+            run_git,
+            cwd=cwd,
+            message=message,
+            reject_sensitive=reject_sensitive,
+            dry_run=dry_run,
+        )
+
+    push_branch(run_git, remote, branch, cwd=cwd, dry_run=dry_run)
+
+    pr_number = gh.find_open_pr(branch, base)
+    if pr_number is None:
+        title = f"supagit: integrate {branch} into {base}"
+        pr_number = gh.create_pr(branch, base, title)
+
+    gh.merge_pr(pr_number)
+
+    if dry_run:
+        return
+
+    try:
+        run_git(
+            "fetch",
+            remote,
+            f"refs/heads/{base}:refs/remotes/{remote}/{base}",
+            cwd=cwd,
+        )
+    except Exception as exc:
+        raise SweepError(f"Could not fetch {remote}/{base} after merge.") from exc
