@@ -22,7 +22,12 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+import supagit_inventory
 import supagit_layout
+import supagit_menu
+import supagit_sweep
+from supagit_inventory import RepoInventory
+from supagit_menu import MenuSelection
 
 GREEN = "\033[32m"
 RED = "\033[31m"
@@ -647,13 +652,18 @@ class Pipeline:
                 capture=True,
             ).strip()
             remote_only, local_only = (int(part) for part in ahead_behind.split())
-            if remote_only:
+            if remote_only and local_only:
                 raise ShipError(
-                    f"Local source branch {self.dev} cannot be published because it does not match "
-                    f"{self.remote}/{self.dev} ({ahead_behind}). Synchronize it with "
-                    "fast-forward and run the command again."
+                    f"Local {self.dev} has diverged from {self.remote}/{self.dev} "
+                    f"({ahead_behind}); reconcile manually before running the pipeline. "
+                    "Fast-forward-only sync cannot proceed while both sides have unique commits."
                 )
-            if local_only:
+            elif remote_only:
+                print(
+                    f"Local {self.dev} is behind {self.remote}/{self.dev} ({ahead_behind}); "
+                    "fast-forward sync will run before publish."
+                )
+            elif local_only:
                 print(f"Local {self.dev} is ahead of {self.remote}/{self.dev} ({ahead_behind}); it will be published in the initial phase.")
 
     @staticmethod
@@ -846,8 +856,139 @@ class Pipeline:
                 return self.backend.targets[legacy_role]
         return None
 
+    def _require_noninteractive_selection(self) -> None:
+        if self.options.yes and not self.options.no_sweep:
+            if self.options.integrate is None or self.options.pipeline_order is None:
+                raise ShipError(
+                    "With --yes, provide --integrate (or --integrate none) and --pipeline, "
+                    "or pass --no-sweep."
+                )
+
+    def _sweep_git(self, *args: str, cwd: Path | None = None, capture: bool = True) -> str:
+        return self.git(
+            *args,
+            capture=capture,
+            mutating=True,
+            cwd=cwd or self.root,
+        )
+
+    def _gh_run_raw(self, command: Sequence[str], **kwargs) -> str:
+        return self.run_raw(list(command), capture=True, mutating=True)
+
+    def build_inventory(self) -> RepoInventory:
+        return supagit_inventory.build_inventory(
+            self.layout,
+            self.branches,
+            self.remote,
+            git_runner=self.git,
+        )
+
+    def run_branch_menu(self, inventory: RepoInventory) -> MenuSelection:
+        self._require_noninteractive_selection()
+        try:
+            if self.options.yes:
+                integrate = self.options.integrate or "none"
+                pipeline = self.options.pipeline_order or ""
+                selection = supagit_menu.selection_from_flags(inventory, pipeline, integrate)
+            else:
+                print(supagit_menu.render_branch_menu(inventory))
+                pipeline_line = self.prompt(
+                    "Pipeline order (numbers/names, empty = default dev→pre→prod): "
+                )
+                integrate_line = self.prompt(
+                    "Integrate features (numbers/names, empty = default, 'none' = skip): "
+                )
+                selection = supagit_menu.parse_menu_responses(
+                    inventory,
+                    pipeline_line,
+                    integrate_line,
+                    default_pipeline=self.branches,
+                )
+        except supagit_menu.MenuError as exc:
+            raise ShipError(str(exc)) from exc
+
+        integrate_text = ", ".join(selection.integrate) if selection.integrate else "(none)"
+        plan = (
+            f"Pipeline: {' → '.join(selection.pipeline)}\n"
+            f"Integrate: {integrate_text}"
+        )
+        self.confirm(f"Proceed with this plan?\n{plan}")
+        return selection
+
+    def apply_menu_selection(self, selection: MenuSelection) -> None:
+        self.branches = tuple(selection.pipeline)
+        self.dev = self.branches[0]
+        self.pre = self.branches[1] if len(self.branches) > 1 else None
+        self.prod = self.branches[-1]
+
+    def ensure_main_checkout_for_promotion(self) -> None:
+        current = self.git("branch", "--show-current", capture=True, cwd=self.root).strip()
+        if current == self.dev:
+            return
+        status = self.git("status", "--porcelain", capture=True, cwd=self.root)
+        if status.strip():
+            raise ShipError(
+                f"Main checkout must be on {self.dev} (currently {current or 'detached'}) "
+                "but the working tree has uncommitted changes."
+            )
+        self.git("checkout", self.dev, mutating=True, cwd=self.root)
+
+    def sweep_features(self, selection: MenuSelection, inventory: RepoInventory) -> None:
+        remote_url = self.git("remote", "get-url", self.remote, capture=True, cwd=self.root).strip()
+        gh = supagit_sweep.GhClient(self._gh_run_raw, dry_run=self.options.dry_run)
+        by_name = {branch.name: branch for branch in inventory.branches}
+        base = selection.pipeline[0]
+
+        for branch in selection.integrate:
+            info = by_name.get(branch)
+            if info is None:
+                raise ShipError(f"Unknown branch: {branch}")
+            cwd = info.worktree_path or self.root
+            try:
+                supagit_sweep.integrate_branch(
+                    self._sweep_git,
+                    gh=gh,
+                    remote=self.remote,
+                    remote_url=remote_url,
+                    branch=branch,
+                    base=base,
+                    cwd=cwd,
+                    message_provider=self._commit_message,
+                    reject_sensitive=self._reject_sensitive_paths,
+                    dry_run=self.options.dry_run,
+                    contained_in_first=info.contained_in_first,
+                )
+            except supagit_sweep.SweepError as exc:
+                raise ShipError(str(exc)) from exc
+
+    def ff_sync_first_branch(self) -> None:
+        try:
+            supagit_sweep.ff_sync_branch(
+                self._sweep_git,
+                self.dev,
+                self.remote,
+                dry_run=self.options.dry_run,
+            )
+        except supagit_sweep.SweepError as exc:
+            raise ShipError(str(exc)) from exc
+
+    def optional_cleanup(self, inventory: RepoInventory, selection: MenuSelection) -> None:
+        pass
+
     def run(self) -> None:
+        if not self.options.no_sweep:
+            self._require_noninteractive_selection()
         self.validate_workspace()
+        inventory = self.build_inventory()
+        if self.options.no_sweep:
+            selection = MenuSelection(integrate=(), pipeline=tuple(self.branches))
+        else:
+            selection = self.run_branch_menu(inventory)
+        self.apply_menu_selection(selection)
+        self.ensure_main_checkout_for_promotion()
+        if selection.integrate:
+            self.sweep_features(selection, inventory)
+        self.ff_sync_first_branch()
         self.commit_and_publish_dev()
         self._assert_dev_synced()
         self.run_checks()
@@ -864,6 +1005,7 @@ class Pipeline:
                 print(f"No database migration target configured for branch {target}; skipping checkpoint.")
             self.promote(source, target)
         self.return_to_dev()
+        self.optional_cleanup(inventory, selection)
         if not self.options.dry_run:
             self.validate_workspace()
         self.status(

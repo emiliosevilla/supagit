@@ -473,5 +473,66 @@ class IntegrateBranchTests(unittest.TestCase):
             )
 
 
+SPEC = importlib.util.spec_from_file_location("supagit_engine", SCRIPTS / "supagit.py")
+assert SPEC and SPEC.loader
+ENGINE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = ENGINE
+SPEC.loader.exec_module(ENGINE)
+
+
+class OrchestrationTests(unittest.TestCase):
+    def test_yes_without_flags_fails(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=False,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=None,
+        )
+        with self.assertRaisesRegex(ENGINE.ShipError, "--integrate"):
+            pipeline._require_noninteractive_selection()
+
+    def test_yes_with_no_sweep_ok(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline._require_noninteractive_selection()
+
+    def test_run_yes_without_flags_fails_before_validate_workspace(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=False,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=None,
+        )
+
+        def fail_if_called() -> None:
+            raise AssertionError("validate_workspace should not be called")
+
+        pipeline.validate_workspace = fail_if_called  # type: ignore[method-assign]
+        with self.assertRaisesRegex(ENGINE.ShipError, "--integrate"):
+            pipeline.run()
+
+
 if __name__ == "__main__":
     unittest.main()
