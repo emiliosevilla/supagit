@@ -80,9 +80,15 @@ The list is processed from left to right. One branch runs checks and publishes
 that branch without merges; multiple branches create one promotion per adjacent
 pair. Missing or duplicate branches stop the pipeline.
 
-The backend is independent from the branch pipeline. For Supabase, prefer
-environment variables or environment-specific `.env` files over literal
-project refs:
+The backend is independent from the branch pipeline and is **optional**.
+
+Installing `supagit` (the global CLI) does **not** connect to Supabase, does
+**not** upload your credentials, and does **not** grant the tool author access
+to your projects. Database steps only run when **your** project’s
+`.supagit.json` sets `"backend": { "provider": "supabase" }` and you already
+have the Supabase CLI logged in on **your** machine. Project refs come from
+**your** environment (or local `.env*` files); prefer naming env vars instead
+of putting refs in the committed JSON:
 
 ```json
 "backend": {
@@ -100,16 +106,17 @@ use `project_ref`, `project_ref_env`, `url_env`, role-specific environment
 variables, or files such as `.env.staging` and `.env.production`. Missing or
 ambiguous targets stop the pipeline; project IDs are never guessed.
 
-For a frontend-only project, use:
+If the project has no database migrations in this pipeline (frontend-only or
+you will migrate elsewhere), use:
 
 ```json
 {"backend": {"provider": "none"}}
 ```
 
-This skips database migration checkpoints while retaining checks and code
-promotion. The previous `supabase.pruebas_project_ref` and
-`supabase.prod_project_ref` fields remain supported for compatibility. Providers
-other than `supabase` and `none` are not implemented yet.
+This skips database checkpoints while retaining checks and code promotion. The
+previous `supabase.pruebas_project_ref` and `supabase.prod_project_ref` fields
+remain supported for compatibility. Providers other than `supabase` and `none`
+are not implemented yet.
 
 ## Initialize a project
 
