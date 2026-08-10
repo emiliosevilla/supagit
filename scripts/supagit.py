@@ -28,12 +28,14 @@ import supagit_layout
 import supagit_menu
 import supagit_sweep
 import supagit_update
+from supagit_busy import BusySpinner, print_welcome
 from supagit_i18n import t
 from supagit_inventory import RepoInventory
 from supagit_menu import MenuSelection
 
 GREEN = "\033[32m"
 RED = "\033[31m"
+CYAN = "\033[36m"
 RESET = "\033[0m"
 
 
@@ -128,6 +130,11 @@ def init_prompt(message: str, color: str) -> str:
     return input(prompt).strip()
 
 
+def init_tutor_prompt(explanation: str, message: str, color: str) -> str:
+    print(colour_text(explanation, CYAN, colour_enabled(color, sys.stdout)))
+    return init_prompt(message, color)
+
+
 def initialise_project(args: argparse.Namespace, options: Options) -> int:
     if args.config is not None:
         raise ShipError("--config cannot be used with supagit init.")
@@ -145,19 +152,26 @@ def initialise_project(args: argparse.Namespace, options: Options) -> int:
     if backend is None:
         if not sys.stdin.isatty():
             raise ShipError("supagit init requires --backend none|supabase when no TTY is available.")
-        backend = init_prompt("Backend [none/supabase] (none): ", options.color).lower() or "none"
+        backend = (
+            init_tutor_prompt(t("explain_backend"), t("backend_prompt"), options.color).lower()
+            or "none"
+        )
     if backend not in {"none", "supabase"}:
         raise ShipError("Backend must be 'none' or 'supabase'.")
 
     pre_ref_env = args.pre_ref_env or "SUPABASE_PRE_PROJECT_REF"
     prod_ref_env = args.prod_ref_env or "SUPABASE_PROD_PROJECT_REF"
     if backend == "supabase" and args.pre_ref_env is None and sys.stdin.isatty():
-        pre_ref_env = init_prompt(
-            f"Variable for Supabase pre project ref ({pre_ref_env}): ", options.color
+        pre_ref_env = init_tutor_prompt(
+            "Environment variable name holding the Supabase pre/staging project ref.",
+            f"Variable for Supabase pre project ref ({pre_ref_env}): ",
+            options.color,
         ) or pre_ref_env
     if backend == "supabase" and args.prod_ref_env is None and sys.stdin.isatty():
-        prod_ref_env = init_prompt(
-            f"Variable for Supabase prod project ref ({prod_ref_env}): ", options.color
+        prod_ref_env = init_tutor_prompt(
+            "Environment variable name holding the Supabase production project ref.",
+            f"Variable for Supabase prod project ref ({prod_ref_env}): ",
+            options.color,
         ) or prod_ref_env
 
     branch_names = None
@@ -239,7 +253,9 @@ class Pipeline:
         if backend is None:
             if self.options.yes or not sys.stdin.isatty():
                 raise ShipError(t("missing_config_need_backend", path=path))
-            backend = (self.prompt(t("backend_prompt")) or "none").lower()
+            backend = (
+                self.tutor_prompt(t("explain_backend"), t("backend_prompt")) or "none"
+            ).lower()
         if backend not in {"none", "supabase"}:
             raise ShipError(t("backend_invalid"))
         branch_names = None
@@ -603,13 +619,18 @@ class Pipeline:
         print(f"$ {rendered}")
         if self.options.dry_run and mutating:
             return ""
-        completed = subprocess.run(
-            [str(part) for part in command],
-            cwd=str(cwd or getattr(self, "root", Path.cwd())),
-            text=True,
-            stdout=subprocess.PIPE if capture else None,
-            stderr=subprocess.PIPE,
+        spinner_enabled = (
+            colour_enabled(self.options.color, sys.stderr)
+            and sys.stderr.isatty()
         )
+        with BusySpinner(enabled=spinner_enabled):
+            completed = subprocess.run(
+                [str(part) for part in command],
+                cwd=str(cwd or getattr(self, "root", Path.cwd())),
+                text=True,
+                stdout=subprocess.PIPE if capture else None,
+                stderr=subprocess.PIPE,
+            )
         if capture and completed.stdout:
             print(completed.stdout, end="")
         if completed.returncode != 0 and check:
@@ -655,6 +676,19 @@ class Pipeline:
         if answer in {"", "y", "yes", "s", "si", "sí"}:
             return
         raise UserAborted(t("user_aborted"))
+
+    def explain(self, message: str) -> None:
+        print(colour_text(message, CYAN, self._colour_enabled()))
+
+    def tutor_prompt(self, explanation: str, prompt_message: str) -> str:
+        self.explain(explanation)
+        return self.prompt(prompt_message)
+
+    def tutor_confirm(self, explanation: str, confirm_message: str) -> None:
+        if self.options.yes:
+            return
+        self.explain(explanation)
+        self.confirm(confirm_message)
 
     def prompt(self, message: str) -> str:
         if self._colour_enabled():
@@ -736,7 +770,10 @@ class Pipeline:
             return "<commit-message-required>"
         if self.options.yes:
             raise ShipError(t("commit_message_yes", branch=self.dev))
-        message = self.prompt(t("commit_message_prompt", branch=self.dev))
+        message = self.tutor_prompt(
+            t("explain_commit_message"),
+            t("commit_message_prompt", branch=self.dev),
+        )
         if not message:
             raise ShipError(t("commit_message_empty"))
         return message
@@ -774,7 +811,10 @@ class Pipeline:
 
         if status.strip():
             message = self._commit_message()
-            self.confirm(t("confirm_commit_publish", branch=self.dev, remote=self.remote))
+            self.tutor_confirm(
+                t("explain_commit_publish", branch=self.dev, remote=self.remote),
+                t("confirm_commit_publish", branch=self.dev, remote=self.remote),
+            )
             self.git("add", "-A", mutating=True)
             staged = self.git("diff", "--cached", "--name-only", capture=True)
             self._reject_sensitive_paths(staged.splitlines())
@@ -793,7 +833,10 @@ class Pipeline:
                 self._assert_dev_synced()
                 return
             print(f"Local {self.dev} contains unpublished commits ({relation.strip()}).")
-            self.confirm(t("confirm_publish_existing", branch=self.dev, remote=self.remote))
+            self.tutor_confirm(
+                t("explain_publish_existing", branch=self.dev, remote=self.remote),
+                t("confirm_publish_existing", branch=self.dev, remote=self.remote),
+            )
 
         self.git("push", self.remote, self.dev, mutating=True)
         self._assert_dev_synced()
@@ -840,7 +883,10 @@ class Pipeline:
                 mutating=True,
             )
             if not self.options.dry_run and "Remote database is up to date" not in dry_output:
-                self.confirm(t("confirm_migrate", label=label, ref=project_ref))
+                self.tutor_confirm(
+                    t("explain_migrate", label=label, ref=project_ref),
+                    t("confirm_migrate", label=label, ref=project_ref),
+                )
             self.run_raw(
                 [self.cli, "db", "push", "--linked", "--yes", "--include-all"],
                 mutating=True,
@@ -861,7 +907,10 @@ class Pipeline:
     def promote(self, source: str, target: str) -> None:
         print(f"\n=== CODE {source} → {target} ===")
         self.fetch_branch(target)
-        self.confirm(t("confirm_promote", source=source, target=target))
+        self.tutor_confirm(
+            t("explain_promote", source=source, target=target),
+            t("confirm_promote", source=source, target=target),
+        )
         self.git("checkout", target, mutating=True)
         try:
             self.git("merge", source, "--no-edit", mutating=True)
@@ -930,27 +979,33 @@ class Pipeline:
                 pipeline = self.options.pipeline_order or ""
                 selection = supagit_menu.selection_from_flags(inventory, pipeline, integrate)
             else:
-                print(supagit_menu.render_branch_menu(inventory))
-                default_chain = " → ".join(self.branches)
-                pipeline_line = self.prompt(
-                    t("pipeline_order_prompt", default=default_chain)
+                self.explain(supagit_menu.render_sweeper_menu(inventory))
+                integrate_line = self.tutor_prompt(
+                    t("explain_integrate"),
+                    t("integrate_prompt"),
                 )
-                integrate_line = self.prompt(t("integrate_prompt"))
+                default_chain = " → ".join(self.branches)
+                pipeline_line = self.tutor_prompt(
+                    t("explain_pipeline_order"),
+                    t("pipeline_order_prompt", default=default_chain),
+                )
                 selection = supagit_menu.parse_menu_responses(
                     inventory,
                     pipeline_line,
                     integrate_line,
                     default_pipeline=self.branches,
                 )
+                self.explain(
+                    supagit_menu.render_execution_plan(
+                        selection,
+                        first_branch=selection.pipeline[0],
+                        remote=self.remote,
+                    )
+                )
+                self.tutor_confirm(t("explain_plan"), t("confirm_plan"))
         except supagit_menu.MenuError as exc:
             raise ShipError(str(exc)) from exc
 
-        integrate_text = ", ".join(selection.integrate) if selection.integrate else "(none)"
-        plan = (
-            f"Pipeline: {' → '.join(selection.pipeline)}\n"
-            f"Integrate: {integrate_text}"
-        )
-        self.confirm(f"{t('confirm_plan')}\n{plan}")
         return selection
 
     def apply_menu_selection(self, selection: MenuSelection) -> None:
@@ -1024,7 +1079,7 @@ class Pipeline:
         for item in plan.items:
             print(f"  - {item.kind}: {item.name} {item.path or ''}")
         if self.options.cleanup is None:
-            self.confirm(t("confirm_cleanup"))
+            self.tutor_confirm(t("explain_cleanup"), t("confirm_cleanup"))
         elif self.options.yes and self.options.cleanup is True:
             pass
         supagit_sweep.apply_cleanup(self._sweep_git, plan, dry_run=self.options.dry_run)
@@ -1048,7 +1103,10 @@ class Pipeline:
         self._assert_dev_synced()
         self.run_checks()
         self.validate_clean_after_checks()
-        self.confirm(t("confirm_pipeline", chain=" → ".join(self.branches)))
+        self.tutor_confirm(
+            t("explain_pipeline", chain=" → ".join(self.branches)),
+            t("confirm_pipeline", chain=" → ".join(self.branches)),
+        )
 
         if self.backend.provider == "none":
             print("\n=== BACKEND NONE: database migration skipped ===")
@@ -1160,6 +1218,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ShipError(t("lang_invalid", value=key)) from exc
         except ValueError as exc:
             raise ShipError(t("lang_invalid", value=str(exc))) from exc
+
+        print_welcome(colour_enabled=colour_enabled(options.color, sys.stdout))
 
         if args.command == "init":
             return initialise_project(args, options)
