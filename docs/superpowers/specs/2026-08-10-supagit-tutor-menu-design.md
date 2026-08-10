@@ -43,9 +43,11 @@ Add on `Pipeline` (or thin helpers used by `Pipeline`):
 - `tutor_prompt(explanation: str, prompt_message: str) -> str` — `explain` then green `prompt`.
 - `tutor_confirm(explanation: str, confirm_message: str) -> None` — `explain` then green `confirm`.
 
-Under `--yes`, `confirm` remains a no-op. Under `--dry-run`, explanations
-still print and **blocking confirms still wait** (green prompt, Enter = yes)
-so the user can review the plan before the dry-run walk continues.
+Under `--yes`, `confirm` remains a no-op. Under `--dry-run`, routine
+Continue? gates after cyan tutor text are **skipped** so the preview can
+reach the plan without extra prompts; the numbered **execution plan** still
+uses a forced confirm so the user can review before the dry-run walk continues.
+The welcome banner also gets a Continue? in interactive non-dry-run runs.
 
 Every interactive question gets an i18n pair: `explain_*` + existing/short confirm/prompt key.
 

@@ -729,9 +729,12 @@ class Pipeline:
             cwd=cwd,
         )
 
-    def confirm(self, message: str) -> None:
-        # Dry-run still pauses for review; only --yes skips prompts.
+    def confirm(self, message: str, *, force: bool = False) -> None:
+        # --yes never prompts. --dry-run skips routine continues, but force=True
+        # keeps the execution-plan gate so the user can still review the plan.
         if self.options.yes:
+            return
+        if self.options.dry_run and not force:
             return
         prompt = f"{message}{t('confirm_suffix')}"
         if self._colour_enabled():
@@ -758,10 +761,12 @@ class Pipeline:
             return False
         return default_yes
 
-    def explain(self, message: str, *, ask_continue: bool = True) -> None:
+    def explain(
+        self, message: str, *, ask_continue: bool = True, force_confirm: bool = False
+    ) -> None:
         self._print_cyan(message)
         if ask_continue:
-            self.confirm(t("confirm_continue"))
+            self.confirm(t("confirm_continue"), force=force_confirm)
 
     def _print_cyan(self, message: str) -> None:
         print(colour_text(message, CYAN, self._colour_enabled()))
@@ -1285,9 +1290,10 @@ class Pipeline:
                         remote=self.remote,
                     )
                     + "\n"
-                    + t("explain_plan")
+                    + t("explain_plan"),
+                    force_confirm=True,
                 )
-                # explain() already asks confirm_continue (default yes).
+                # force_confirm keeps the plan gate even under --dry-run.
         except supagit_menu.MenuError as exc:
             raise ShipError(str(exc)) from exc
 
@@ -1605,6 +1611,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ShipError(t("lang_invalid", value=str(exc))) from exc
 
         print_welcome(colour_enabled=colour_enabled(options.color, sys.stdout))
+        if not options.yes and not options.dry_run:
+            # Welcome is the first cyan block; gate before any further work.
+            prompt = t("confirm_continue") + t("confirm_suffix")
+            if colour_enabled(options.color, sys.stdout):
+                prompt = f"{GREEN}{prompt}{RESET}"
+            answer = input(prompt).strip().lower()
+            if answer not in {"", "y", "yes", "s", "si", "sí"}:
+                raise UserAborted(t("user_aborted"))
 
         if args.command == "init":
             return initialise_project(args, options)
