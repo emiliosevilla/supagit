@@ -50,9 +50,11 @@ default to Yes (`[Y/n]` / `[S/n]`).
 
 Unless `--no-sweep` is passed, `supagit` shows an interactive branch menu
 (run-scoped; choices are not persisted into `.supagit.json`). The menu and
-execution plan are **cyan** (tutor context). After every cyan block, a green
-**Continue?** / **¿Continuar?** confirmation appears (Enter = yes; `--yes`
-skips). User answers are **green** prompts.
+execution plan are **cyan** (tutor context). After the welcome banner and
+every later cyan block, a green **Continue?** / **¿Continuar?** confirmation
+appears (Enter = yes; `--yes` skips). Under `--dry-run`, routine Continues
+are skipped; only the execution-plan gate remains. User answers are
+**green** prompts.
 
 The menu has two labeled blocks:
 

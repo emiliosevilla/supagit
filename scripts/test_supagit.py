@@ -181,24 +181,38 @@ class BranchDiscoveryTests(unittest.TestCase):
     def test_tutor_confirm_explain_under_dry_run(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.options = MODULE.Options(True, False, None, None, "always")
-        with patch("builtins.print") as mocked_print, patch("builtins.input", return_value="") as mocked_input:
+        with patch("builtins.print") as mocked_print, patch("builtins.input") as mocked_input:
             pipeline.tutor_confirm("Will publish main.", "Continue?")
         mocked_print.assert_called_once_with(
             f"{MODULE.CYAN}Will publish main.{MODULE.RESET}"
         )
-        prompt = mocked_input.call_args.args[0]
-        self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
-        self.assertIn("[Y/n]", prompt)
-        self.assertIn("Continue?", prompt)
+        # Routine confirms are skipped under --dry-run.
+        mocked_input.assert_not_called()
 
-    def test_confirm_waits_under_dry_run(self) -> None:
+    def test_confirm_waits_under_dry_run_when_forced(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.options = MODULE.Options(True, False, None, None, "always")
         with patch("builtins.input", return_value="") as mocked_input:
-            pipeline.confirm("Run these steps?")
+            pipeline.confirm("Run these steps?", force=True)
         prompt = mocked_input.call_args.args[0]
         self.assertIn("Run these steps?", prompt)
         self.assertIn("[Y/n]", prompt)
+
+    def test_explain_skips_continue_under_dry_run(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(True, False, None, None, "always")
+        with patch("builtins.print") as mocked_print, patch("builtins.input") as mocked_input:
+            pipeline.explain("Tutor text")
+        mocked_print.assert_called_once()
+        mocked_input.assert_not_called()
+
+    def test_explain_force_confirm_waits_under_dry_run(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(True, False, None, None, "always")
+        with patch("builtins.print"), patch("builtins.input", return_value="") as mocked_input:
+            pipeline.explain("Plan text", force_confirm=True)
+        prompt = mocked_input.call_args.args[0]
+        self.assertIn("Continue?", prompt)
 
     def test_failed_command_colours_every_stderr_line(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -653,7 +667,39 @@ class CheckoutFlexTests(unittest.TestCase):
                         code = MODULE.main(["--lang", "en", "--no-sweep", "--yes"])
         self.assertEqual(code, 1)
 
-    def test_legacy_branch_detection_names_config_path(self) -> None:
+    def test_confirm_skips_under_dry_run(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(True, False, None, None, "always")
+        with patch("builtins.input") as mocked_input:
+            pipeline.confirm("Continue?")
+        mocked_input.assert_not_called()
+
+    def test_main_welcome_continue_on_interactive_run(self) -> None:
+        with patch.object(MODULE.supagit_i18n, "ensure_language", return_value="en"):
+            with patch.object(MODULE, "print_welcome"):
+                with patch.object(MODULE, "needs_skip_update", return_value=True):
+                    with patch("builtins.input", return_value="") as mocked_input:
+                        with patch.object(MODULE, "Pipeline") as pipeline_cls:
+                            pipeline_cls.return_value.run.return_value = None
+                            code = MODULE.main(["--lang", "en", "--no-sweep"])
+        self.assertEqual(code, 0)
+        self.assertTrue(mocked_input.called)
+        prompt = mocked_input.call_args.args[0]
+        self.assertIn("Continue?", prompt)
+
+    def test_main_welcome_continue_skipped_under_dry_run(self) -> None:
+        with patch.object(MODULE.supagit_i18n, "ensure_language", return_value="en"):
+            with patch.object(MODULE, "print_welcome"):
+                with patch.object(MODULE, "needs_skip_update", return_value=True):
+                    with patch("builtins.input") as mocked_input:
+                        with patch.object(MODULE, "Pipeline") as pipeline_cls:
+                            pipeline_cls.return_value.run.return_value = None
+                            code = MODULE.main(["--lang", "en", "--no-sweep", "--dry-run"])
+        self.assertEqual(code, 0)
+        # Dry-run must not gate on welcome Continue?; Pipeline.run may still prompt
+        # for plan with force=True, but welcome itself must not call input here
+        # because Pipeline is mocked.
+        mocked_input.assert_not_called()
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.config = {
             "branches": {"dev": None, "pre": None, "prod": None},

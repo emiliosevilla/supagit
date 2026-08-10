@@ -9,10 +9,10 @@ the agent-specific skill operating instructions are in
 
 ## Installation
 
-Preferred: the one-liner. It clones (or updates) the canonical source into
-`~/.local/share/supagit` and runs the global installer. Forking is only for
-proposing changes — install from `emiliosevilla/supagit` so auto-updates keep
-working.
+Preferred: the one-liner. You may run it from **any directory** — including
+outside a Git repository. It only installs the global `supagit` command (clone
+under `~/.local/share/supagit` + `~/.local/bin`). Forking is only for proposing
+changes — install from `emiliosevilla/supagit` so auto-updates keep working.
 
 ### Option A — one-liner (`curl`) — recommended
 
@@ -28,8 +28,11 @@ curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/
 
 Optional overrides: `SUPAGIT_REPO_URL`, `SUPAGIT_SOURCE_DIR`, `SUPAGIT_BRANCH`.
 
-After install, run `supagit` from any of your projects (ensure `~/.local/bin`
-is on your `PATH`).
+After install, ensure `~/.local/bin` is on your `PATH`, then open a terminal
+**inside the project you want to publish** (a Git repo with a remote) and run
+`supagit`. If that project has no `.supagit.json`, `supagit` helps you create
+one. Merging independent work via pull requests requires the GitHub CLI (`gh`)
+to be installed and authenticated.
 
 ### Option B — clone, then install
 
@@ -177,10 +180,13 @@ supagit
 ### Sweeper (default)
 
 Unless `--no-sweep` is passed, an interactive menu selects for **this run
-only** (not persisted). The menu and execution plan are printed in **cyan** (tutor context). After
-every cyan block, `supagit` asks a green **Continue?** / **¿Continuar?**
-(`[Y/n]` / `[S/n]`; Enter = yes) before moving on. User answers to questions
-(commit message, branch picks, etc.) are also **green** prompts.
+only** (not persisted). The menu and execution plan are printed in **cyan**
+(tutor context). After the welcome banner and after every later cyan block,
+`supagit` asks a green **Continue?** / **¿Continuar?** (`[Y/n]` / `[S/n]`;
+Enter = yes) before moving on. Under `--dry-run`, those routine Continues are
+skipped so the preview can reach the plan without extra gates; only the
+numbered **execution plan** still asks for confirmation. User answers to
+questions (commit message, branch picks, etc.) are also **green** prompts.
 
 The menu has two labeled blocks:
 
@@ -230,7 +236,7 @@ by itself change the mode (only branch rules do).
 
 | Flag | Effect |
 |------|--------|
-| `--dry-run` | Print the plan without mutating Git or Supabase. |
+| `--dry-run` | Preview the plan without mutating Git or Supabase. Skips routine Continue? gates; still confirms at the execution plan. |
 | `--lang en\|es` | UI language (skips the language menu). Also `SUPAGIT_LANG`. Required with `--yes` / non-TTY. |
 | `--backend` | Backend for `init` or auto-init when `.supagit.json` is missing (`none` / `supabase`). |
 | `--no-sweep` | Skip menu and feature integration; still explains and relocates the checkout to the first pipeline branch when needed (fail-closed if dirty) and ff-only syncs that branch. |
