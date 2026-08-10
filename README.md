@@ -15,6 +15,10 @@ From this repository, install the global command and agent files with:
 scripts/install-supagit-global.sh
 ```
 
+On a TTY the installer asks for language (`(1) English` / `(2) Español`).
+Skip the menu with `--lang en|es` or `SUPAGIT_LANG`. Non-TTY defaults to English.
+Auto-updates from the global launcher pass `--lang` so they never prompt mid-run.
+
 The installer updates `~/.local/bin/supagit` and the local skill/command copies.
 It records this repository as the source and does not alter a project
 repository. It also removes any previous generated launcher and skill files so
