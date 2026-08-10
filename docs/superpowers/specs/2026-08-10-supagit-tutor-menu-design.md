@@ -43,7 +43,9 @@ Add on `Pipeline` (or thin helpers used by `Pipeline`):
 - `tutor_prompt(explanation: str, prompt_message: str) -> str` — `explain` then green `prompt`.
 - `tutor_confirm(explanation: str, confirm_message: str) -> None` — `explain` then green `confirm`.
 
-Under `dry_run` or `yes`, `confirm` remains no-op (existing); explanations for dry-run may still print so the plan is readable.
+Under `--yes`, `confirm` remains a no-op. Under `--dry-run`, explanations
+still print and **blocking confirms still wait** (green prompt, Enter = yes)
+so the user can review the plan before the dry-run walk continues.
 
 Every interactive question gets an i18n pair: `explain_*` + existing/short confirm/prompt key.
 
@@ -153,3 +155,13 @@ Remove the old English instructional lines from `render_branch_menu` that duplic
 3. Menu shows checks for work, numbers for pipeline; defaults match approved rules.
 4. Plan cyan + confirm green after menu.
 5. Both unit suites pass; installer unchanged unless new module file is added (prefer no new module; extend menu + i18n + Pipeline).
+
+## Amendment (2026-08-10 — flexible checkout)
+
+Prompt order remains **integrate first, then pipeline** (as above). After the
+pipeline line is parsed, if `pipeline[0]` differs from the inventory's
+`first_branch`, the inventory is rebuilt with that new base (configured
+pipeline membership unchanged) and the integrate answer is re-validated
+against it before the execution plan is rendered. This keeps `[✓]` defaults,
+"already included in …" notes, and `error_contained_integrate` aligned with
+the base the run will actually use.

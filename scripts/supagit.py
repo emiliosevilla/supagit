@@ -239,7 +239,7 @@ class Pipeline:
 
     def __init__(self, options: Options) -> None:
         self.options = options
-        self.layout = supagit_layout.resolve_repo_layout()
+        self.layout = self._resolve_layout()
         self.launch_root = self.layout.launch_root
         self.root = self.layout.main_root
         self._branch_check_on_main = self.layout.is_linked_launch
@@ -255,11 +255,14 @@ class Pipeline:
         self.pre = self.branches[1] if len(self.branches) > 1 else None
         self.prod = self.branches[-1]
 
-    def _git_root(self) -> Path:
+    def _resolve_layout(self) -> supagit_layout.RepoLayout:
         try:
-            return supagit_layout.resolve_repo_layout().main_root
+            return supagit_layout.resolve_repo_layout()
         except supagit_layout.LayoutError as exc:
-            raise ShipError("Not inside a Git repository.") from exc
+            message = str(exc)
+            if "not a git repository" in message.lower():
+                raise ShipError(t("not_git_repo")) from exc
+            raise ShipError(t("layout_unsupported", detail=exc)) from exc
 
     def _load_config(self) -> dict:
         path = self.options.config_path
@@ -295,6 +298,17 @@ class Pipeline:
                 for part in self.options.pipeline_order.split(",")
                 if part.strip()
             ]
+        if not branch_names:
+            if self.options.yes or not sys.stdin.isatty():
+                raise ShipError(t("missing_config_need_branches", path=path))
+            live = self.git("branch", "--show-current", capture=True).strip() or "main"
+            answer = self.tutor_prompt(
+                t("explain_branches_init"),
+                t("branches_prompt", default=live),
+            )
+            branch_names = [
+                part.strip() for part in answer.split(",") if part.strip()
+            ] or [live]
         config = init_project_config(
             backend,
             "SUPABASE_PRE_PROJECT_REF",
@@ -601,17 +615,23 @@ class Pipeline:
             ranked = self.rank_branch_candidates(role, remote_branches, aliases)
             if not ranked:
                 raise ShipError(
-                    f"Could not detect the {role} branch. Available remote branches: "
-                    + ", ".join(remote_branches)
-                    + ". Add branches.{role} to .supagit.json."
+                    t(
+                        "error_branch_detection",
+                        role=role,
+                        available=", ".join(remote_branches),
+                        path=self.config_path,
+                    )
                 )
             top_score = ranked[0][0]
             top = [branch for score, branch in ranked if score == top_score]
             if len(top) != 1:
                 raise ShipError(
-                    f"Ambiguous {role} branch detection: "
-                    + ", ".join(top)
-                    + ". Add branches.{role} to .supagit.json."
+                    t(
+                        "error_branch_ambiguous",
+                        role=role,
+                        candidates=", ".join(top),
+                        path=self.config_path,
+                    )
                 )
             resolved[role] = top[0]
         print(
@@ -696,7 +716,8 @@ class Pipeline:
         )
 
     def confirm(self, message: str) -> None:
-        if self.options.dry_run or self.options.yes:
+        # Dry-run still pauses for review; only --yes skips prompts.
+        if self.options.yes:
             return
         prompt = f"{message}{t('confirm_suffix')}"
         if self._colour_enabled():
@@ -706,6 +727,22 @@ class Pipeline:
         if answer in {"", "y", "yes", "s", "si", "sí"}:
             return
         raise UserAborted(t("user_aborted"))
+
+    def ask_yes_no(self, message: str, *, default_yes: bool = True) -> bool:
+        """Optional yes/no that does not abort the run on 'no'."""
+        if self.options.yes:
+            return default_yes
+        if self.options.dry_run:
+            return False
+        prompt = f"{message}{t('confirm_suffix')}"
+        if self._colour_enabled():
+            prompt = f"{self.GREEN}{prompt}{self.RESET}"
+        answer = input(prompt).strip().lower()
+        if answer in {"", "y", "yes", "s", "si", "sí"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        return default_yes
 
     def explain(self, message: str) -> None:
         print(colour_text(message, CYAN, self._colour_enabled()))
@@ -725,32 +762,59 @@ class Pipeline:
             message = f"{self.GREEN}{message}{self.RESET}"
         return input(message).strip()
 
-    def validate_workspace(self) -> None:
+    def announce_launch_checkout(self) -> None:
+        current = self.git(
+            "branch", "--show-current", capture=True, cwd=self.root
+        ).strip()
+        if not current:
+            sha = self.git(
+                "rev-parse", "--short", "HEAD", capture=True, cwd=self.root
+            ).strip()
+            current = t("detached_label", sha=sha or "HEAD")
+        self.explain(t("startup_any_branch", branch=current))
+
+    def maybe_return_to_start_branch(self) -> None:
+        if self.options.dry_run:
+            return
+        start = (self.original_branch or "").strip()
+        if not start or start == self.dev:
+            return
+        if self.options.yes:
+            self.explain(
+                t("return_skipped_yes", pipeline=self.dev, branch=start)
+            )
+            return
+        self.explain(t("explain_return", pipeline=self.dev, branch=start))
+        if not self.ask_yes_no(t("confirm_return", branch=start), default_yes=True):
+            return
+        status = self.git("status", "--porcelain", capture=True, cwd=self.root)
+        if status.strip():
+            self.explain(
+                t("return_skipped_dirty", pipeline=self.dev, branch=start)
+            )
+            return
+        self.git("checkout", start, mutating=True, cwd=self.root)
+        self.status(t("return_done", branch=start), self.GREEN)
+
+    def preflight_repo(self) -> None:
         if self.layout.is_linked_launch:
             print(
                 f"Launch worktree: {self.launch_root}; promotion checkout: {self.root}"
-            )
-            current_main = self.git("branch", "--show-current", capture=True, cwd=self.root).strip()
-            if current_main != self.dev:
-                status = self.git("status", "--porcelain", capture=True, cwd=self.root)
-                if status.strip():
-                    raise ShipError(
-                        f"Main checkout must be on {self.dev} (currently {current_main or 'detached'}) "
-                        f"but the working tree has uncommitted changes. Launch path was {self.launch_root}."
-                    )
-        elif self.original_branch != self.dev:
-            raise ShipError(
-                f"Wrong checkout: currently on {self.original_branch or '(detached HEAD)'}, "
-                f"but the pipeline must start on {self.dev}."
             )
         worktrees = self.git("worktree", "list", "--porcelain", capture=True)
         if worktrees.count("worktree ") > 1 and not self.layout.is_linked_launch:
             self.warning("registered worktrees exist, but the current checkout is the main repository.")
         print(f"Repository: {self.project_name}")
         self.git("remote", "get-url", self.remote)
-        remote_refs = [f"refs/heads/{branch}" for branch in self.branches]
-        self.git("ls-remote", self.remote, *remote_refs)
-        self.git("fetch", self.remote, f"refs/heads/{self.dev}:refs/remotes/{self.remote}/{self.dev}", mutating=True)
+        self.announce_launch_checkout()
+
+    def validate_pipeline_head(self) -> None:
+        self.git(
+            "fetch",
+            self.remote,
+            f"refs/heads/{self.dev}:refs/remotes/{self.remote}/{self.dev}",
+            mutating=True,
+        )
         if not self.options.dry_run:
             ahead_behind = self.git(
                 "rev-list",
@@ -762,17 +826,31 @@ class Pipeline:
             remote_only, local_only = (int(part) for part in ahead_behind.split())
             if remote_only and local_only:
                 raise ShipError(
-                    f"Local {self.dev} has diverged from {self.remote}/{self.dev} "
-                    f"({ahead_behind}); reconcile manually before running the pipeline. "
-                    "Fast-forward-only sync cannot proceed while both sides have unique commits."
+                    t(
+                        "error_diverged_head",
+                        branch=self.dev,
+                        remote=self.remote,
+                        counts=ahead_behind,
+                    )
                 )
             elif remote_only:
                 print(
-                    f"Local {self.dev} is behind {self.remote}/{self.dev} ({ahead_behind}); "
-                    "fast-forward sync will run before publish."
+                    t(
+                        "head_behind_note",
+                        branch=self.dev,
+                        remote=self.remote,
+                        counts=ahead_behind,
+                    )
                 )
             elif local_only:
-                print(f"Local {self.dev} is ahead of {self.remote}/{self.dev} ({ahead_behind}); it will be published in the initial phase.")
+                print(
+                    t(
+                        "head_ahead_note",
+                        branch=self.dev,
+                        remote=self.remote,
+                        counts=ahead_behind,
+                    )
+                )
 
     @staticmethod
     def _is_sensitive_path(path: str) -> bool:
@@ -809,6 +887,8 @@ class Pipeline:
         return message
 
     def _assert_dev_checkout(self) -> None:
+        if self.options.dry_run:
+            return
         current = self.git("branch", "--show-current", capture=True).strip()
         if current != self.dev:
             raise ShipError(
@@ -993,13 +1073,42 @@ class Pipeline:
     def _gh_run_raw(self, command: Sequence[str], **kwargs) -> str:
         return self.run_raw(list(command), capture=True, mutating=True)
 
-    def build_inventory(self) -> RepoInventory:
+    def build_inventory(self, *, first_branch: str | None = None) -> RepoInventory:
         return supagit_inventory.build_inventory(
             self.layout,
             self.branches,
             self.remote,
             git_runner=self.git,
+            first_branch=first_branch,
         )
+
+    def _resolve_selection(
+        self,
+        inventory: RepoInventory,
+        pipeline_line: str,
+        integrate_line: str,
+        default_pipeline: Sequence[str],
+        *,
+        interactive: bool = False,
+    ) -> MenuSelection:
+        pipeline = supagit_menu.parse_pipeline_line(
+            inventory, pipeline_line, default_pipeline
+        )
+        if pipeline[0] != inventory.first_branch:
+            inventory = self.build_inventory(first_branch=pipeline[0])
+            notice = t("menu_base_changed", base=pipeline[0])
+            if interactive:
+                current = self.original_branch or None
+                self.explain(
+                    notice
+                    + "\n"
+                    + supagit_menu.render_sweeper_menu(
+                        inventory, current_branch=current
+                    )
+                )
+            else:
+                print(notice)
+        return supagit_menu.selection_with_base(inventory, pipeline, integrate_line)
 
     def run_branch_menu(self, inventory: RepoInventory) -> MenuSelection:
         self._require_noninteractive_selection()
@@ -1007,9 +1116,16 @@ class Pipeline:
             if self.options.yes:
                 integrate = self.options.integrate or "none"
                 pipeline = self.options.pipeline_order or ""
-                selection = supagit_menu.selection_from_flags(inventory, pipeline, integrate)
+                selection = self._resolve_selection(
+                    inventory, pipeline, integrate, default_pipeline=()
+                )
             else:
-                self.explain(supagit_menu.render_sweeper_menu(inventory))
+                current = self.original_branch or None
+                self.explain(
+                    supagit_menu.render_sweeper_menu(
+                        inventory, current_branch=current
+                    )
+                )
                 integrate_line = self.tutor_prompt(
                     t("explain_integrate"),
                     t("integrate_prompt"),
@@ -1019,11 +1135,12 @@ class Pipeline:
                     t("explain_pipeline_order"),
                     t("pipeline_order_prompt", default=default_chain),
                 )
-                selection = supagit_menu.parse_menu_responses(
+                selection = self._resolve_selection(
                     inventory,
                     pipeline_line,
                     integrate_line,
                     default_pipeline=self.branches,
+                    interactive=True,
                 )
                 self.explain(
                     supagit_menu.render_execution_plan(
@@ -1044,17 +1161,116 @@ class Pipeline:
         self.pre = self.branches[1] if len(self.branches) > 1 else None
         self.prod = self.branches[-1]
 
-    def ensure_main_checkout_for_promotion(self) -> None:
-        current = self.git("branch", "--show-current", capture=True, cwd=self.root).strip()
+    @staticmethod
+    def _format_dirty_paths(status: str) -> str:
+        paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
+        shown = paths[:5]
+        lines = [f"  {path}" for path in shown]
+        remaining = len(paths) - len(shown)
+        if remaining > 0:
+            lines.append(t("error_dirty_reposition_more", count=remaining))
+        return "\n".join(lines)
+
+    def _first_branch_worktree(self) -> Path | None:
+        porcelain = self.git(
+            "worktree", "list", "--porcelain", capture=True, cwd=self.root
+        )
+        for entry in supagit_inventory.parse_worktree_porcelain(porcelain):
+            if entry.get("branch") != self.dev:
+                continue
+            path = Path(str(entry["path"])).resolve()
+            if path != self.root.resolve():
+                return path
+        return None
+
+    def _ensure_first_branch_ref(self) -> None:
+        local_ref = f"refs/heads/{self.dev}"
+        remote_ref = f"refs/remotes/{self.remote}/{self.dev}"
+
+        def verifies(ref: str) -> bool:
+            try:
+                self.git("rev-parse", "--verify", ref, capture=True, cwd=self.root)
+                return True
+            except ShipError:
+                return False
+
+        if verifies(local_ref) or verifies(remote_ref):
+            return
+        self.git(
+            "fetch",
+            self.remote,
+            f"refs/heads/{self.dev}:refs/remotes/{self.remote}/{self.dev}",
+            mutating=True,
+            cwd=self.root,
+        )
+
+    def ensure_checkout_on_first_branch(self) -> None:
+        current = self.git(
+            "branch", "--show-current", capture=True, cwd=self.root
+        ).strip()
         if current == self.dev:
             return
+
+        other = self._first_branch_worktree()
+        if other is not None:
+            raise ShipError(
+                t(
+                    "error_first_branch_in_worktree",
+                    branch=self.dev,
+                    path=other,
+                )
+            )
+
+        current_label = current
+        if current == "":
+            sha = self.git(
+                "rev-parse", "--short", "HEAD", capture=True, cwd=self.root
+            ).strip()
+            contains = self.git(
+                "branch",
+                "--contains",
+                "HEAD",
+                "--format=%(refname:short)",
+                capture=True,
+                cwd=self.root,
+            ).strip()
+            if not contains:
+                raise ShipError(t("error_detached_unreachable", sha=sha))
+            current_label = t("detached_label", sha=sha)
+
         status = self.git("status", "--porcelain", capture=True, cwd=self.root)
         if status.strip():
             raise ShipError(
-                f"Main checkout must be on {self.dev} (currently {current or 'detached'}) "
-                "but the working tree has uncommitted changes."
+                t(
+                    "error_dirty_reposition",
+                    current=current_label,
+                    target=self.dev,
+                    files=self._format_dirty_paths(status),
+                )
             )
+
+        self._ensure_first_branch_ref()
+        self.tutor_confirm(
+            t("explain_reposition", current=current_label, target=self.dev),
+            t("confirm_reposition", current=current_label, target=self.dev),
+        )
         self.git("checkout", self.dev, mutating=True, cwd=self.root)
+
+    def verify_final_checkout(self) -> None:
+        # Dry-run never repositions; comparing live checkout would false-alarm.
+        if self.options.dry_run:
+            return
+        actual = self.git(
+            "branch", "--show-current", capture=True, cwd=self.root
+        ).strip()
+        if actual != self.dev:
+            self.warning(
+                t(
+                    "final_checkout_mismatch",
+                    expected=self.dev,
+                    actual=actual or "(detached HEAD)",
+                )
+            )
 
     def sweep_features(self, selection: MenuSelection, inventory: RepoInventory) -> None:
         remote_url = self.git("remote", "get-url", self.remote, capture=True, cwd=self.root).strip()
@@ -1117,14 +1333,15 @@ class Pipeline:
     def run(self) -> None:
         if not self.options.no_sweep:
             self._require_noninteractive_selection()
-        self.validate_workspace()
+        self.preflight_repo()
         inventory = self.build_inventory()
         if self.options.no_sweep:
             selection = MenuSelection(integrate=(), pipeline=tuple(self.branches))
         else:
             selection = self.run_branch_menu(inventory)
         self.apply_menu_selection(selection)
-        self.ensure_main_checkout_for_promotion()
+        self.ensure_checkout_on_first_branch()
+        self.validate_pipeline_head()
         inventory = self.build_inventory()
         if selection.integrate:
             self.sweep_features(selection, inventory)
@@ -1149,12 +1366,12 @@ class Pipeline:
             self.promote(source, target)
         self.return_to_dev()
         self.optional_cleanup(inventory, selection)
-        if not self.options.dry_run:
-            self.validate_workspace()
+        self.verify_final_checkout()
         self.status(
             t("pipeline_completed", chain=" → ".join(self.branches), branch=self.dev),
             self.GREEN,
         )
+        self.maybe_return_to_start_branch()
 
 
 def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, Options]:

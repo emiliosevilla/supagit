@@ -125,9 +125,10 @@ def build_inventory(
     remote: str,
     *,
     git_runner: GitRunner,
+    first_branch: str | None = None,
 ) -> RepoInventory:
     cwd = layout.main_root
-    first_branch = pipeline_branches[0]
+    first_branch = first_branch or pipeline_branches[0]
     pipeline_set = set(pipeline_branches)
 
     porcelain = git_runner("worktree", "list", "--porcelain", cwd=cwd, capture=True)

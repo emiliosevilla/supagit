@@ -9,28 +9,56 @@ the agent-specific skill operating instructions are in
 
 ## Installation
 
-From this repository, install the global command and agent files with:
+You need a **local clone** of this repository once. After that, run `supagit`
+from any of your projects. Forking is only for proposing changes; it is not
+required (and not recommended) for installation — install from
+`emiliosevilla/supagit` so auto-updates keep working.
+
+### Option A — one-liner (`curl`)
+
+After the repository is public on GitHub:
 
 ```bash
-scripts/install-supagit-global.sh
+curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
 ```
+
+Spanish UI during install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh -s -- --lang es
+```
+
+That script clones (or fast-forward updates) the source into
+`~/.local/share/supagit`, then runs the global installer. Optional overrides:
+`SUPAGIT_REPO_URL`, `SUPAGIT_SOURCE_DIR`, `SUPAGIT_BRANCH`.
+
+### Option B — clone, then install
+
+```bash
+git clone https://github.com/emiliosevilla/supagit.git
+cd supagit
+./scripts/install-supagit-global.sh --lang es
+```
+
+If you already develop inside a clone of this repo, you can install from that
+checkout the same way (`./scripts/install-supagit-global.sh`).
 
 On a TTY the installer asks for language (`(1) English` / `(2) Español`).
 Skip the menu with `--lang en|es` or `SUPAGIT_LANG`. Non-TTY defaults to English.
 Auto-updates from the global launcher pass `--lang` so they never prompt mid-run.
 
 The installer updates `~/.local/bin/supagit` and the local skill/command copies.
-It records this repository as the source and does not alter a project
-repository. It also removes any previous generated launcher and skill files so
-there is one command name only.
+It records the source clone path and does not alter a project repository. It
+also removes any previous generated launcher and skill files so there is one
+command name only.
 
 After the first installation, running `supagit` checks the registered source
 against the global copy and updates the skill automatically when it is stale.
 At startup it also compares the source-root clone to `origin/main` on GitHub
 (`emiliosevilla/supagit`); if behind, it fast-forward pulls, reinstalls, and
 re-executes. Set `SUPAGIT_SKIP_UPDATE=1` to skip that check (tests / one-shot
-re-exec). If the source repository has moved, run this installer again from its
-new path.
+re-exec). If the source repository has moved, run the installer again from its
+new path (or re-run the bootstrap one-liner).
 
 ## Configuration
 
@@ -109,20 +137,35 @@ layout, for example `supagit init --backend none --branches main`.
 
 ## Running
 
-You may run `supagit` from the main repository or from a linked worktree.
-When launched from a linked worktree, promotion uses the main checkout; the
-launch path is printed at startup.
+Just run `supagit` from the folder you are in. **Do not** switch branches
+first and **do not** copy placeholder text such as `<rama-feature>` into the
+shell (zsh treats `<…>` as file redirection and fails).
+
+You may run from the main repository or from a linked worktree, and from
+**any** branch (feature, pipeline, or a detached HEAD with a reachable
+commit) as long as the working tree is clean when a move is required. When
+launched from a linked worktree, promotion uses the main checkout; the launch
+path is printed at startup.
+
+At startup, `supagit` tells you which branch you are on and that you should
+not change it yourself. After the sweeper menu confirms the plan, it explains
+(cyan) that it must move the checkout to the first pipeline branch and asks
+(green) before doing so. A dirty tree that requires that move stops the run
+with an actionable message — it never stashes, force-checks out, or discards
+your work. If you are already on the first pipeline branch with local
+changes, those are committed and published as usual. When the release
+finishes, interactive runs offer to return you to the branch you started on.
 
 Always inspect the plan first:
 
 ```bash
-scripts/supagit --dry-run
+supagit --dry-run
 ```
 
 Then run the confirmed pipeline:
 
 ```bash
-scripts/supagit
+supagit
 ```
 
 ### Sweeper (default)
@@ -166,7 +209,7 @@ present, promotes each adjacent branch pair, and returns to the first branch.
 | `--dry-run` | Print the plan without mutating Git or Supabase. |
 | `--lang en\|es` | UI language (skips the language menu). Also `SUPAGIT_LANG`. Required with `--yes` / non-TTY. |
 | `--backend` | Backend for `init` or auto-init when `.supagit.json` is missing (`none` / `supabase`). |
-| `--no-sweep` | Skip menu and feature integration; still relocate to main checkout when needed and ff-only sync the first branch. |
+| `--no-sweep` | Skip menu and feature integration; still explains and relocates the checkout to the first pipeline branch when needed (fail-closed if dirty) and ff-only syncs that branch. |
 | `--integrate` | Comma-separated feature branches, or `none` (non-interactive). |
 | `--pipeline` | Comma-separated ordered pipeline branches (non-interactive). |
 | `--yes` | Skip confirmations; requires `--integrate` and `--pipeline` unless `--no-sweep`. |

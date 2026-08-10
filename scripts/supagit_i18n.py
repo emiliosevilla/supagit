@@ -36,7 +36,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "integrate_prompt": (
             "Independent work to merge (names, Enter = all checked, none = skip): "
         ),
-        "confirm_plan": "Continue?",
+        "confirm_plan": "Run these steps?",
         "explain_backend": (
             "Supagit needs a project configuration file. "
             "Choose whether this project uses Supabase for database migrations."
@@ -74,7 +74,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Choose which main branches to include and their order. "
             "Numbers refer to the pipeline list above."
         ),
-        "explain_plan": "Review the plan above. Continue to run these steps.",
+        "explain_plan": "Review the plan above.",
         "menu_section_worktrees": "── Independent worktrees ──",
         "menu_section_other_work": "── Other local work branches (no worktree) ──",
         "menu_section_pipeline": "── Main local and remote repository branches ──",
@@ -135,6 +135,102 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "busy_working": "supagit is working…",
         "busy_abort_hint": "(Ctrl+C to abort)",
+        "explain_reposition": (
+            "The plan starts on {target}, but this checkout is on {current}. "
+            "I need to move the checkout to {target}. Nothing on {current} is lost — "
+            "that branch stays exactly as it is."
+        ),
+        "confirm_reposition": "Move the checkout from {current} to {target}?",
+        "detached_label": "detached HEAD at {sha}",
+        "error_dirty_reposition": (
+            "I cannot move the checkout to {target}: {current} has uncommitted changes:\n"
+            "{files}\n"
+            "Save them first (run supagit again and let it commit them on {current}), "
+            "or park them with: git stash push -u -m supagit"
+        ),
+        "error_dirty_reposition_more": "  … and {count} more file(s)",
+        "final_checkout_mismatch": (
+            "the run finished on {actual}, not on the expected {expected}. "
+            "Nothing is pending on the remote; stay here or run supagit again from {expected}."
+        ),
+        "startup_any_branch": (
+            "You are on {branch}. Do not change branches yourself — after you confirm "
+            "the plan, I will move the checkout to the first pipeline branch if needed."
+        ),
+        "explain_return": (
+            "The release finished on {pipeline}. You started this run on {branch}."
+        ),
+        "confirm_return": "Return the checkout to {branch}?",
+        "return_done": "Checkout is back on {branch}.",
+        "return_skipped_dirty": (
+            "Leaving you on {pipeline}: moving back to {branch} needs a clean tree. "
+            "Your release is done; run supagit again when you want to continue on {branch}."
+        ),
+        "return_skipped_yes": (
+            "Leaving the checkout on {pipeline} (--yes). Start again from {branch} "
+            "whenever you want to continue there — no manual git switch is required."
+        ),
+        "error_diverged_head": (
+            "Local {branch} has diverged from {remote}/{branch} ({counts}); "
+            "reconcile it manually before running the pipeline. "
+            "Fast-forward-only sync cannot proceed while both sides have unique commits."
+        ),
+        "head_behind_note": (
+            "Local {branch} is behind {remote}/{branch} ({counts}); "
+            "fast-forward sync will run before publish."
+        ),
+        "head_ahead_note": (
+            "Local {branch} is ahead of {remote}/{branch} ({counts}); "
+            "it will be published in the initial phase."
+        ),
+        "menu_current_branch": "You are on: {branch}",
+        "menu_base_changed": (
+            "The first pipeline branch is now {base}, so I re-checked the work "
+            "branches against {base}:"
+        ),
+        "error_not_pipeline_branch": (
+            "{branch} is not one of this project's main branches ({configured}); "
+            "only those can be ordered here. To merge {branch} into the pipeline, "
+            "answer it in the independent-work question instead; to make it a main "
+            'branch, add it to "branches" in .supagit.json.'
+        ),
+        "error_unknown_branch": "There is no local branch named {branch}.",
+        "error_integrate_in_pipeline": (
+            "{branch} is a main pipeline branch; it cannot also be merged as independent work."
+        ),
+        "error_pipeline_empty": "The pipeline must include at least one branch.",
+        "error_pipeline_number": (
+            "Invalid pipeline number: {token}. Use the numbers shown in the main-branches list."
+        ),
+        "explain_branches_init": (
+            "Supagit needs this project's main branches, in release order "
+            "(for example: main, or dev,pre,prod)."
+        ),
+        "branches_prompt": "Main branches in order (comma-separated) [{default}]: ",
+        "missing_config_need_branches": (
+            "Missing configuration file {path}. With --yes or non-TTY, also pass "
+            "--pipeline a,b,c to declare the main branches."
+        ),
+        "error_branch_detection": (
+            'Could not detect the {role} branch. Remote branches: {available}. '
+            'Set "branches" in {path} to an ordered list (for example "branches": ["main"]), '
+            "or re-create the config with: supagit init --branches a,b,c"
+        ),
+        "error_branch_ambiguous": (
+            "Ambiguous {role} branch detection: {candidates}. "
+            'Set "branches" in {path} to an ordered list, or re-create the config with: '
+            "supagit init --branches a,b,c"
+        ),
+        "error_first_branch_in_worktree": (
+            "{branch} is already checked out in another worktree: {path}. "
+            "Run supagit from there, or close that worktree with: git worktree remove {path}"
+        ),
+        "error_detached_unreachable": (
+            "HEAD is detached at {sha} and that commit is not on any branch; "
+            "moving the checkout would lose it. Save it first by creating a branch, "
+            "for example: git switch -c rescue-work"
+        ),
+        "layout_unsupported": "Unsupported repository layout: {detail}",
     },
     "es": {
         "lang_menu": "Language / Idioma:\n  (1) English\n  (2) Español\nOpción [1/2]: ",
@@ -162,7 +258,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "integrate_prompt": (
             "Trabajo independiente a fusionar (nombres, Enter = todos marcados, ninguno = omitir): "
         ),
-        "confirm_plan": "¿Continuar?",
+        "confirm_plan": "¿Ejecuto estos pasos?",
         "explain_backend": (
             "Supagit necesita un fichero de configuración del proyecto. "
             "Indica si este proyecto usa Supabase para migraciones de base de datos."
@@ -199,7 +295,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Elige qué ramas principales incluir y su orden. "
             "Los números se refieren a la lista del pipeline arriba."
         ),
-        "explain_plan": "Revisa el plan anterior. Continúa para ejecutar estos pasos.",
+        "explain_plan": "Revisa el plan anterior.",
         "menu_section_worktrees": "── Worktrees independientes ──",
         "menu_section_other_work": "── Otras ramas de trabajo locales (sin worktree) ──",
         "menu_section_pipeline": "── Ramas principales del repositorio local y remoto ──",
@@ -260,6 +356,105 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "busy_working": "supagit está trabajando…",
         "busy_abort_hint": "(Ctrl+C para abortar)",
+        "explain_reposition": (
+            "El plan empieza en {target}, pero este checkout está en {current}. "
+            "Necesito mover el checkout a {target}. No se pierde nada de {current}: "
+            "esa rama se queda tal cual."
+        ),
+        "confirm_reposition": "¿Mover el checkout de {current} a {target}?",
+        "detached_label": "HEAD desacoplado en {sha}",
+        "error_dirty_reposition": (
+            "No puedo mover el checkout a {target}: {current} tiene cambios sin guardar:\n"
+            "{files}\n"
+            "Guárdalos primero (vuelve a ejecutar supagit y deja que los confirme en {current}), "
+            "o apártalos con: git stash push -u -m supagit"
+        ),
+        "error_dirty_reposition_more": "  … y {count} fichero(s) más",
+        "final_checkout_mismatch": (
+            "la ejecución terminó en {actual}, no en {expected} como se esperaba. "
+            "En remoto no queda nada pendiente; quédate aquí o vuelve a ejecutar "
+            "supagit desde {expected}."
+        ),
+        "startup_any_branch": (
+            "Estás en {branch}. No cambies de rama tú — cuando confirmes el plan, "
+            "yo moveré el checkout a la primera rama del pipeline si hace falta."
+        ),
+        "explain_return": (
+            "La publicación terminó en {pipeline}. Empezaste esta ejecución en {branch}."
+        ),
+        "confirm_return": "¿Vuelvo el checkout a {branch}?",
+        "return_done": "Checkout de vuelta en {branch}.",
+        "return_skipped_dirty": (
+            "Te dejo en {pipeline}: para volver a {branch} el árbol debe estar limpio. "
+            "La publicación ya está hecha; vuelve a ejecutar supagit cuando quieras "
+            "seguir en {branch}."
+        ),
+        "return_skipped_yes": (
+            "Dejo el checkout en {pipeline} (--yes). Cuando quieras seguir en {branch}, "
+            "vuelve a ejecutar supagit desde ahí — no hace falta un git switch manual."
+        ),
+        "error_diverged_head": (
+            "El {branch} local ha divergido de {remote}/{branch} ({counts}); "
+            "reconcílialo manualmente antes de ejecutar el pipeline. "
+            "La sincronización solo-fast-forward no puede continuar si ambos lados tienen commits propios."
+        ),
+        "head_behind_note": (
+            "El {branch} local está por detrás de {remote}/{branch} ({counts}); "
+            "se hará fast-forward antes de publicar."
+        ),
+        "head_ahead_note": (
+            "El {branch} local está por delante de {remote}/{branch} ({counts}); "
+            "se publicará en la fase inicial."
+        ),
+        "menu_current_branch": "Estás en: {branch}",
+        "menu_base_changed": (
+            "La primera rama del pipeline ahora es {base}, así que he vuelto a comprobar "
+            "las ramas de trabajo contra {base}:"
+        ),
+        "error_not_pipeline_branch": (
+            "{branch} no es una de las ramas principales de este proyecto ({configured}); "
+            "aquí solo se pueden ordenar esas. Para fusionar {branch} en el pipeline, "
+            "respóndela en la pregunta de trabajo independiente; para convertirla en rama "
+            'principal, añádela a "branches" en .supagit.json.'
+        ),
+        "error_unknown_branch": "No existe ninguna rama local llamada {branch}.",
+        "error_integrate_in_pipeline": (
+            "{branch} es una rama principal del pipeline; no puede fusionarse además "
+            "como trabajo independiente."
+        ),
+        "error_pipeline_empty": "El pipeline debe incluir al menos una rama.",
+        "error_pipeline_number": (
+            "Número de pipeline no válido: {token}. Usa los números de la lista de ramas principales."
+        ),
+        "explain_branches_init": (
+            "Supagit necesita las ramas principales de este proyecto, en orden de publicación "
+            "(por ejemplo: main, o dev,pre,prod)."
+        ),
+        "branches_prompt": "Ramas principales en orden (separadas por comas) [{default}]: ",
+        "missing_config_need_branches": (
+            "Falta el fichero de configuración {path}. Con --yes o sin TTY, pasa también "
+            "--pipeline a,b,c para declarar las ramas principales."
+        ),
+        "error_branch_detection": (
+            "No se pudo detectar la rama {role}. Ramas remotas: {available}. "
+            'Define "branches" en {path} como una lista ordenada (por ejemplo "branches": ["main"]), '
+            "o recrea la configuración con: supagit init --branches a,b,c"
+        ),
+        "error_branch_ambiguous": (
+            "Detección ambigua de la rama {role}: {candidates}. "
+            'Define "branches" en {path} como una lista ordenada, o recrea la configuración con: '
+            "supagit init --branches a,b,c"
+        ),
+        "error_first_branch_in_worktree": (
+            "{branch} ya está abierta en otro worktree: {path}. "
+            "Ejecuta supagit desde allí, o cierra ese worktree con: git worktree remove {path}"
+        ),
+        "error_detached_unreachable": (
+            "HEAD está desacoplado en {sha} y ese commit no está en ninguna rama; "
+            "mover el checkout lo perdería. Guárdalo primero creando una rama, "
+            "por ejemplo: git switch -c rescue-work"
+        ),
+        "layout_unsupported": "Estructura de repositorio no soportada: {detail}",
     },
 }
 

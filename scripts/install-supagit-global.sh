@@ -81,6 +81,20 @@ Choice [1/2]: "
     ;;
 esac
 
+installer_colour_enabled=true
+if [ "${NO_COLOR+x}" = x ] || [ "${TERM:-}" = dumb ]; then
+  installer_colour_enabled=false
+fi
+
+# Green success line (ANSI 32), matching the global wrapper's colour_line.
+print_green() {
+  if [ "$installer_colour_enabled" = true ]; then
+    printf '\033[32m%s\033[0m\n' "$*"
+  else
+    printf '%s\n' "$*"
+  fi
+}
+
 msg() {
   key=$1
   case "$lang:$key" in
@@ -115,10 +129,10 @@ msg() {
       printf '%s\n' "Las terminales nuevas cargan ~/.zprofile automáticamente."
       ;;
     en:path_ready)
-      printf '%s\n' "PATH already configured; you can run supagit from this terminal."
+      print_green "PATH already configured; you can run supagit from this terminal."
       ;;
     es:path_ready)
-      printf '%s\n' "PATH ya configurado; puedes ejecutar supagit desde esta terminal."
+      print_green "PATH ya configurado; puedes ejecutar supagit desde esta terminal."
       ;;
     en:path_in_profile_not_shell)
       printf '%s\n' "PATH is in ~/.zprofile but not in this terminal yet."
