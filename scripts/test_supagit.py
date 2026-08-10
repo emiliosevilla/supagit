@@ -68,15 +68,20 @@ class BranchDiscoveryTests(unittest.TestCase):
             message=None,
             color="always",
         )
-        with patch("builtins.input", return_value="release message") as mocked_input:
+        with patch(
+            "builtins.input", side_effect=["", "release message"]
+        ) as mocked_input:
             pipeline.dev = "main"
             message = pipeline._commit_message()
 
         self.assertEqual(message, "release message")
+        self.assertEqual(mocked_input.call_count, 2)
         prompt = mocked_input.call_args.args[0]
         self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
         self.assertTrue(prompt.endswith(MODULE.Pipeline.RESET))
         self.assertIn("Commit message for main: ", prompt)
+        continue_prompt = mocked_input.call_args_list[0].args[0]
+        self.assertIn("Continue?", continue_prompt)
 
     def test_success_status_uses_green_when_color_is_forced(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -133,11 +138,23 @@ class BranchDiscoveryTests(unittest.TestCase):
     def test_explain_uses_cyan_when_color_forced(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.options = MODULE.Options(False, False, None, None, "always")
-        with patch("builtins.print") as mocked_print:
+        with patch("builtins.print") as mocked_print, patch("builtins.input", return_value="") as mocked_input:
             pipeline.explain("Tutor text")
         mocked_print.assert_called_once_with(
             f"{MODULE.CYAN}Tutor text{MODULE.RESET}"
         )
+        prompt = mocked_input.call_args.args[0]
+        self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
+        self.assertIn("Continue?", prompt)
+        self.assertIn("[Y/n]", prompt)
+
+    def test_explain_skips_confirm_under_yes(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, True, None, None, "always")
+        with patch("builtins.print") as mocked_print, patch("builtins.input") as mocked_input:
+            pipeline.explain("Tutor text")
+        mocked_print.assert_called_once()
+        mocked_input.assert_not_called()
 
     def test_tutor_confirm_prints_cyan_then_green_confirm(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -151,6 +168,7 @@ class BranchDiscoveryTests(unittest.TestCase):
         self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
         self.assertIn("[Y/n]", prompt)
         self.assertIn("Continue?", prompt)
+        self.assertEqual(mocked_input.call_count, 1)
 
     def test_tutor_confirm_skips_under_yes(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)

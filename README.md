@@ -170,8 +170,10 @@ supagit
 ### Sweeper (default)
 
 Unless `--no-sweep` is passed, an interactive menu selects for **this run
-only** (not persisted). The menu is printed in **cyan** (tutor context); your
-answers are **green** prompts.
+only** (not persisted). The menu and execution plan are printed in **cyan** (tutor context). After
+every cyan block, `supagit` asks a green **Continue?** / **¿Continuar?**
+(`[Y/n]` / `[S/n]`; Enter = yes) before moving on. User answers to questions
+(commit message, branch picks, etc.) are also **green** prompts.
 
 The menu has two labeled blocks:
 

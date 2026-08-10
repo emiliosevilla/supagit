@@ -19,6 +19,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "aborted_interrupt": "ABORTED: user interruption.",
         "user_aborted": "Operation cancelled by the user.",
         "confirm_suffix": " [Y/n] ",
+        "confirm_continue": "Continue?",
         "warning": "WARNING: {detail}",
         "missing_config_creating": "Missing configuration file {path}; creating it now.",
         "missing_config_need_backend": (
@@ -261,6 +262,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "aborted_interrupt": "ABORTADO: interrupción del usuario.",
         "user_aborted": "Operación cancelada por el usuario.",
         "confirm_suffix": " [S/n] ",
+        "confirm_continue": "¿Continuar?",
         "warning": "AVISO: {detail}",
         "missing_config_creating": "Falta el fichero de configuración {path}; creándolo ahora.",
         "missing_config_need_backend": (
