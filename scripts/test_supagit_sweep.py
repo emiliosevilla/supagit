@@ -451,6 +451,55 @@ class GhClientTests(unittest.TestCase):
         client.merge_pr(7, delete_branch=False)
         self.assertEqual(calls[0], ["gh", "pr", "merge", "7", "--merge"])
 
+    def test_pr_number_from_create_output(self) -> None:
+        self.assertEqual(
+            supagit_sweep.pr_number_from_create_output(
+                "https://github.com/acme/demo/pull/42\n"
+            ),
+            42,
+        )
+        self.assertIsNone(supagit_sweep.pr_number_from_create_output("no url here"))
+
+    def test_create_pr_parses_url_and_omits_json_flags(self) -> None:
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            return "https://github.com/acme/demo/pull/99\n"
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        number = client.create_pr("work", "main", "title")
+        self.assertEqual(number, 99)
+        self.assertEqual(calls[0][:3], ["gh", "pr", "create"])
+        self.assertNotIn("--json", calls[0])
+        self.assertNotIn("--jq", calls[0])
+
+    def test_create_promote_pr_parses_url_and_omits_json_flags(self) -> None:
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            return "https://github.com/acme/demo/pull/7\n"
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        number = client.create_promote_pr("dev", "main", "promote")
+        self.assertEqual(number, 7)
+        self.assertNotIn("--json", calls[0])
+
+    def test_create_pr_falls_back_to_find_open_pr(self) -> None:
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:3] == ["gh", "pr", "create"]:
+                return "created without url"
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return "15"
+            raise AssertionError(cmd)
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        self.assertEqual(client.create_pr("work", "main", "title"), 15)
+
     def test_parse_github_owner_repo(self) -> None:
         self.assertEqual(
             supagit_sweep.parse_github_owner_repo("git@github.com:acme/demo.git"),
