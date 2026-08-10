@@ -283,6 +283,14 @@ class FfSyncTests(unittest.TestCase):
         self.assertEqual(calls[0][:2], ("fetch", "origin"))
         self.assertIn(("remote", "get-url", "origin"), calls)
 
+    def test_ahead_behind_rejects_empty_output(self) -> None:
+        def run_git(*args: str, cwd=None, capture: bool = True) -> str:
+            return ""
+
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
+            supagit_sweep.ahead_behind(run_git, "dev", "origin/dev")
+        self.assertIn("ahead/behind", str(ctx.exception))
+
 
 class MenuTests(unittest.TestCase):
     def test_defaults_skip_contained_features(self) -> None:

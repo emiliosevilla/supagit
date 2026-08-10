@@ -443,6 +443,16 @@ class I18nAndUpdateTests(unittest.TestCase):
         with patch.dict(os.environ, {MODULE.supagit_update.SKIP_ENV: "0"}):
             self.assertFalse(MODULE.needs_skip_update())
 
+    def test_git_command_mutating_classifier(self) -> None:
+        self.assertFalse(MODULE._git_command_is_mutating(("rev-list", "--count", "a...b")))
+        self.assertFalse(MODULE._git_command_is_mutating(("rev-parse", "main")))
+        self.assertFalse(MODULE._git_command_is_mutating(("remote", "get-url", "origin")))
+        self.assertFalse(MODULE._git_command_is_mutating(("branch", "--show-current")))
+        self.assertFalse(MODULE._git_command_is_mutating(("worktree", "list", "--porcelain")))
+        self.assertTrue(MODULE._git_command_is_mutating(("fetch", "origin", "main")))
+        self.assertTrue(MODULE._git_command_is_mutating(("merge", "--ff-only", "origin/main")))
+        self.assertTrue(MODULE._git_command_is_mutating(("push", "origin", "main")))
+
 
 class WelcomeAndBusyTests(unittest.TestCase):
     def setUp(self) -> None:

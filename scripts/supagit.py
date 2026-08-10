@@ -39,6 +39,36 @@ CYAN = "\033[36m"
 RESET = "\033[0m"
 
 
+def _git_command_is_mutating(args: Sequence[str]) -> bool:
+    """Return True when a git subcommand may change the working tree or refs."""
+    if not args:
+        return False
+    cmd = args[0]
+    if cmd in {
+        "rev-parse",
+        "rev-list",
+        "status",
+        "diff",
+        "log",
+        "show",
+        "ls-files",
+        "ls-remote",
+        "for-each-ref",
+        "merge-base",
+        "cat-file",
+        "name-rev",
+        "symbolic-ref",
+    }:
+        return False
+    if cmd == "remote" and len(args) >= 2 and args[1] == "get-url":
+        return False
+    if cmd == "branch" and "--show-current" in args:
+        return False
+    if cmd == "worktree" and len(args) >= 2 and args[1] == "list":
+        return False
+    return True
+
+
 class ShipError(RuntimeError):
     pass
 
@@ -956,7 +986,7 @@ class Pipeline:
         return self.git(
             *args,
             capture=capture,
-            mutating=True,
+            mutating=_git_command_is_mutating(args),
             cwd=cwd or self.root,
         )
 

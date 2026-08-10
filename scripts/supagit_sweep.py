@@ -42,8 +42,14 @@ def ahead_behind(run_git: GitRunner, local: str, remote_ref: str) -> tuple[int, 
         "--left-right",
         "--count",
         f"{remote_ref}...{local}",
-    )
-    remote_only, local_only = (int(part) for part in counts.split())
+    ).strip()
+    parts = counts.split()
+    if len(parts) != 2:
+        raise SweepError(
+            f"Could not compute ahead/behind for {local} versus {remote_ref} "
+            f"(got {counts!r})."
+        )
+    remote_only, local_only = (int(part) for part in parts)
     return remote_only, local_only
 
 
