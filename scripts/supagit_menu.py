@@ -43,10 +43,10 @@ def parse_integrate_line(inventory: RepoInventory, line: str) -> tuple[str, ...]
         if token.isdigit():
             raise MenuError("Menu numbers are only for pipeline order, not integrate branches")
         if token not in by_name:
-            raise MenuError(f"Unknown branch: {token}")
+            raise MenuError(t("error_unknown_branch", branch=token))
         branch = by_name[token]
         if branch.is_pipeline:
-            raise MenuError(f"Integrate branch cannot be in pipeline: {token}")
+            raise MenuError(t("error_integrate_in_pipeline", branch=token))
         if branch.contained_in_first:
             raise MenuError(t("error_contained_integrate", branch=token, base=base))
         if token in seen:
@@ -74,13 +74,19 @@ def parse_pipeline_line(
             if token.isdigit():
                 index = int(token) - 1
                 if index < 0 or index >= len(pipeline_names):
-                    raise MenuError(f"Invalid pipeline menu number: {token}")
+                    raise MenuError(t("error_pipeline_number", token=token))
                 name = pipeline_names[index]
             else:
                 if token not in by_name:
-                    raise MenuError(f"Unknown branch: {token}")
+                    raise MenuError(t("error_unknown_branch", branch=token))
                 if not by_name[token].is_pipeline:
-                    raise MenuError(f"Not a pipeline branch: {token}")
+                    raise MenuError(
+                        t(
+                            "error_not_pipeline_branch",
+                            branch=token,
+                            configured=", ".join(pipeline_names),
+                        )
+                    )
                 name = token
             if name in seen:
                 continue
@@ -89,8 +95,23 @@ def parse_pipeline_line(
         pipeline = tuple(names)
 
     if not pipeline:
-        raise MenuError("Pipeline must include at least one branch")
+        raise MenuError(t("error_pipeline_empty"))
     return pipeline
+
+
+def selection_with_base(
+    inventory: RepoInventory,
+    pipeline: Sequence[str],
+    integrate_line: str,
+) -> MenuSelection:
+    integrate = parse_integrate_line(inventory, integrate_line)
+
+    pipeline_set = set(pipeline)
+    for name in integrate:
+        if name in pipeline_set:
+            raise MenuError(t("error_integrate_in_pipeline", branch=name))
+
+    return MenuSelection(integrate=integrate, pipeline=tuple(pipeline))
 
 
 def parse_menu_responses(
@@ -100,15 +121,11 @@ def parse_menu_responses(
     *,
     default_pipeline: Sequence[str],
 ) -> MenuSelection:
-    pipeline = parse_pipeline_line(inventory, pipeline_line, default_pipeline)
-    integrate = parse_integrate_line(inventory, integrate_line)
-
-    pipeline_set = set(pipeline)
-    for name in integrate:
-        if name in pipeline_set:
-            raise MenuError(f"Integrate branch cannot be in pipeline: {name}")
-
-    return MenuSelection(integrate=integrate, pipeline=pipeline)
+    return selection_with_base(
+        inventory,
+        parse_pipeline_line(inventory, pipeline_line, default_pipeline),
+        integrate_line,
+    )
 
 
 def selection_from_flags(
@@ -178,10 +195,18 @@ def _format_pipeline_line(index: int, branch: BranchInfo) -> str:
     return f"{index}. {branch.name}{sync}"
 
 
-def render_sweeper_menu(inventory: RepoInventory) -> str:
+def render_sweeper_menu(
+    inventory: RepoInventory,
+    *,
+    current_branch: str | None = None,
+) -> str:
     worktrees, other_work, pipeline = classify_menu_branches(inventory)
     base = inventory.first_branch
     lines: list[str] = []
+
+    if current_branch is not None:
+        lines.append(t("menu_current_branch", branch=current_branch))
+        lines.append("")
 
     if worktrees:
         lines.append(t("menu_section_worktrees"))

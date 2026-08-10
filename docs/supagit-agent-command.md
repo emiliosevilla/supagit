@@ -9,6 +9,14 @@ The only command name is `supagit`. You may launch it from the main repository
 or from a linked worktree; when launched from a linked worktree, promotion runs
 from the main checkout while feature work may live in the launch worktree.
 
+**Never tell the user to `git switch` / `git checkout` before running
+`supagit`.** Do not invent shell placeholders such as `<rama-feature>` or
+`<branch>` — zsh treats `<…>` as redirection and the user sees a scary
+failure that has nothing to do with the project. Launch `supagit` from the
+current working directory as-is. The CLI announces the current branch, moves
+to `pipeline[0]` after plan confirmation when needed, and (interactively)
+offers to return to the starting branch at the end.
+
 ## Before running
 
 Measure the repository before any mutating step:
@@ -18,7 +26,8 @@ Measure the repository before any mutating step:
 3. Read `.supagit.json` in the project root.
 4. When feature integration is expected, run `gh auth status` (GitHub CLI must
    be authenticated for the PR merge path).
-5. Run `supagit --dry-run` and review the printed plan.
+5. Run `supagit --dry-run` **from the current branch** and review the printed
+   plan (no prior branch switch).
 6. Request explicit user confirmation before a non-dry-run run.
 
 If the target project has no `.supagit.json`, `supagit` auto-creates it

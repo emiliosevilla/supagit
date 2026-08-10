@@ -163,12 +163,24 @@ class BranchDiscoveryTests(unittest.TestCase):
     def test_tutor_confirm_explain_under_dry_run(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.options = MODULE.Options(True, False, None, None, "always")
-        with patch("builtins.print") as mocked_print, patch("builtins.input") as mocked_input:
+        with patch("builtins.print") as mocked_print, patch("builtins.input", return_value="") as mocked_input:
             pipeline.tutor_confirm("Will publish main.", "Continue?")
         mocked_print.assert_called_once_with(
             f"{MODULE.CYAN}Will publish main.{MODULE.RESET}"
         )
-        mocked_input.assert_not_called()
+        prompt = mocked_input.call_args.args[0]
+        self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
+        self.assertIn("[Y/n]", prompt)
+        self.assertIn("Continue?", prompt)
+
+    def test_confirm_waits_under_dry_run(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(True, False, None, None, "always")
+        with patch("builtins.input", return_value="") as mocked_input:
+            pipeline.confirm("Run these steps?")
+        prompt = mocked_input.call_args.args[0]
+        self.assertIn("Run these steps?", prompt)
+        self.assertIn("[Y/n]", prompt)
 
     def test_failed_command_colours_every_stderr_line(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -325,18 +337,9 @@ class I18nAndUpdateTests(unittest.TestCase):
         os.environ[MODULE.supagit_update.SKIP_ENV] = "1"
 
     def test_tutor_i18n_keys_exist_in_en_and_es(self) -> None:
-        keys = (
-            "explain_integrate",
-            "menu_section_worktrees",
-            "menu_section_pipeline",
-            "plan_header",
-            "error_contained_integrate",
-        )
-        for lang in ("en", "es"):
-            MODULE.supagit_i18n.set_lang(lang)
-            for key in keys:
-                text = MODULE.t(key, branch="x", base="dev", default="dev → pre")
-                self.assertNotEqual(text, key, msg=f"missing {lang}:{key}")
+        en_keys = set(MODULE.supagit_i18n._MESSAGES["en"])
+        es_keys = set(MODULE.supagit_i18n._MESSAGES["es"])
+        self.assertEqual(en_keys, es_keys)
 
     def test_t_switches_language(self) -> None:
         MODULE.supagit_i18n.set_lang("en")
@@ -380,6 +383,7 @@ class I18nAndUpdateTests(unittest.TestCase):
                 message=None,
                 color="never",
                 backend="none",
+                pipeline_order="main",
             )
             pipeline.root = Path(tmp)
             with patch("builtins.print"):
@@ -387,6 +391,51 @@ class I18nAndUpdateTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             data = path.read_text(encoding="utf-8")
             self.assertIn('"provider": "none"', data)
+            self.assertIn('"main"', data)
+
+    def test_auto_create_config_interactive_asks_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".supagit.json"
+            pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+            pipeline.options = MODULE.Options(
+                dry_run=False,
+                yes=False,
+                config_path=path,
+                message=None,
+                color="never",
+                backend="none",
+            )
+            pipeline.root = Path(tmp)
+
+            def git(*args, **kwargs):
+                if args[:2] == ("branch", "--show-current"):
+                    return "topic\n"
+                raise AssertionError(args)
+
+            pipeline.git = git  # type: ignore[method-assign]
+            pipeline.tutor_prompt = lambda explanation, prompt: "main"  # type: ignore[method-assign]
+            with patch("builtins.print"), patch("sys.stdin.isatty", return_value=True):
+                pipeline._auto_create_config(path)
+            config = __import__("json").loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(config["branches"], ["main"])
+
+    def test_auto_create_config_yes_without_pipeline_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".supagit.json"
+            pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+            pipeline.options = MODULE.Options(
+                dry_run=False,
+                yes=True,
+                config_path=path,
+                message=None,
+                color="never",
+                backend="none",
+            )
+            pipeline.root = Path(tmp)
+            with patch("builtins.print"):
+                with self.assertRaises(MODULE.ShipError) as ctx:
+                    pipeline._auto_create_config(path)
+            self.assertIn("--pipeline", str(ctx.exception))
 
     def test_auto_create_config_refuses_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -400,6 +449,7 @@ class I18nAndUpdateTests(unittest.TestCase):
                 message=None,
                 color="never",
                 backend="none",
+                pipeline_order="main",
             )
             with patch("builtins.print"):
                 with self.assertRaisesRegex(MODULE.ShipError, "refusing to overwrite"):
@@ -497,6 +547,136 @@ class WelcomeAndBusyTests(unittest.TestCase):
         self.assertIn("supagit is working", output)
         self.assertIn("Ctrl+C", output)
         self.assertIn(MODULE.CYAN, output)
+
+
+class CheckoutFlexTests(unittest.TestCase):
+    def setUp(self) -> None:
+        MODULE.supagit_i18n.set_lang("en")
+
+    def test_build_inventory_first_branch_override(self) -> None:
+        layout = MODULE.supagit_layout.RepoLayout(
+            launch_root=Path("/repo"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=False,
+        )
+        calls: list[tuple] = []
+
+        def git_runner(*args, **kwargs):
+            calls.append(args)
+            if args[:2] == ("worktree", "list"):
+                return "worktree /repo\nbranch refs/heads/dev\n"
+            if args[0] == "for-each-ref":
+                return "dev\npre\nprod\nfeature/x\n"
+            if args[:2] == ("rev-parse", "--verify"):
+                return "ok"
+            if args[:2] == ("rev-parse", "--abbrev-ref"):
+                raise RuntimeError("no upstream")
+            if args[:2] == ("rev-list", "--left-right"):
+                return "0\t0"
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                # contained against first_branch (args[3])
+                needle, haystack = args[2], args[3]
+                if needle == "feature/x" and haystack == "pre":
+                    return ""
+                raise RuntimeError("not ancestor")
+            raise AssertionError(args)
+
+        inv = MODULE.supagit_inventory.build_inventory(
+            layout,
+            ("dev", "pre", "prod"),
+            "origin",
+            git_runner=git_runner,
+            first_branch="pre",
+        )
+        self.assertEqual(inv.first_branch, "pre")
+        by_name = {b.name: b for b in inv.branches}
+        self.assertTrue(by_name["dev"].is_pipeline)
+        self.assertTrue(by_name["pre"].is_pipeline)
+        self.assertTrue(by_name["prod"].is_pipeline)
+        self.assertTrue(by_name["feature/x"].contained_in_first)
+
+    def test_resolve_layout_not_git_repo(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+
+        def boom(cwd=None):
+            raise MODULE.supagit_layout.LayoutError(
+                "fatal: not a git repository (or any of the parent directories): .git"
+            )
+
+        with patch.object(MODULE.supagit_layout, "resolve_repo_layout", side_effect=boom):
+            with self.assertRaises(MODULE.ShipError) as ctx:
+                pipeline._resolve_layout()
+        self.assertEqual(str(ctx.exception), MODULE.t("not_git_repo"))
+
+    def test_resolve_layout_unsupported(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        detail = "Unsupported git common dir layout: /bare.git"
+
+        def boom(cwd=None):
+            raise MODULE.supagit_layout.LayoutError(detail)
+
+        with patch.object(MODULE.supagit_layout, "resolve_repo_layout", side_effect=boom):
+            with self.assertRaises(MODULE.ShipError) as ctx:
+                pipeline._resolve_layout()
+        self.assertIn("Unsupported repository layout", str(ctx.exception))
+        self.assertIn(detail, str(ctx.exception))
+
+    def test_main_returns_1_for_not_git_repo(self) -> None:
+        def boom(*args, **kwargs):
+            raise MODULE.ShipError(MODULE.t("not_git_repo"))
+
+        with patch.object(MODULE, "Pipeline", side_effect=boom):
+            with patch.object(MODULE.supagit_i18n, "ensure_language", return_value="en"):
+                with patch.object(MODULE, "print_welcome"):
+                    with patch.object(MODULE, "needs_skip_update", return_value=True):
+                        code = MODULE.main(["--lang", "en", "--no-sweep", "--yes"])
+        self.assertEqual(code, 1)
+
+    def test_legacy_branch_detection_names_config_path(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.config = {
+            "branches": {"dev": None, "pre": None, "prod": None},
+            "branch_aliases": {},
+        }
+        pipeline.config_path = Path("/proj/.supagit.json")
+        pipeline.remote = "origin"
+        pipeline.project_name = "proj"
+        pipeline.DEFAULT_BRANCH_ALIASES = MODULE.Pipeline.DEFAULT_BRANCH_ALIASES
+
+        def remote_branches():
+            return ["main", "feature/x"]
+
+        pipeline._remote_branches = remote_branches  # type: ignore[method-assign]
+        with patch("builtins.print"):
+            with self.assertRaises(MODULE.ShipError) as ctx:
+                pipeline._resolve_branches()
+        text = str(ctx.exception)
+        self.assertIn(".supagit.json", text)
+        self.assertIn("branches", text)
+        self.assertIn("supagit init --branches", text)
+
+    def test_contained_integrate_names_rederived_base(self) -> None:
+        inv = MODULE.supagit_inventory.RepoInventory(
+            MODULE.supagit_layout.RepoLayout(
+                Path("/repo"), Path("/repo"), Path("/repo/.git"), False
+            ),
+            (),
+            (
+                MODULE.supagit_inventory.BranchInfo(
+                    "pre", True, False, None, 0, 0, True, None, False
+                ),
+                MODULE.supagit_inventory.BranchInfo(
+                    "old", False, False, None, 0, 0, True, None, False
+                ),
+            ),
+            "pre",
+        )
+        with self.assertRaises(MODULE.supagit_menu.MenuError) as ctx:
+            MODULE.supagit_menu.parse_integrate_line(inv, "old")
+        self.assertIn("pre", str(ctx.exception))
 
 
 if __name__ == "__main__":
