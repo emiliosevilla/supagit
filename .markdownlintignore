@@ -1,0 +1,8 @@
+# Agent scratch (Subagent-Driven Development) — not product docs
+.superpowers/
+
+# Long-form design/plan dumps (intentional line length / tables)
+docs/superpowers/
+
+# Local task checklists
+tasks/

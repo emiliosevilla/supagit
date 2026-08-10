@@ -1,0 +1,7 @@
+{
+  "markdownlint.ignore": [
+    ".superpowers/**",
+    "docs/superpowers/**",
+    "tasks/**"
+  ]
+}
