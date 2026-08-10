@@ -163,15 +163,11 @@ def init_prompt(message: str, color: str) -> str:
 def init_tutor_prompt(
     explanation: str, message: str, color: str, *, yes: bool = False
 ) -> str:
+    # Cyan context + green answer field; no Continue? — the prompt is the gate.
+    # `yes` is accepted for call-site compatibility; --yes still uses flags for
+    # non-interactive init rather than this helper's Continue (removed as redundant).
+    _ = yes
     print(colour_text(explanation, CYAN, colour_enabled(color, sys.stdout)))
-    if not yes:
-        suffix = t("confirm_suffix")
-        cont = colour_text(
-            t("confirm_continue") + suffix, GREEN, colour_enabled(color, sys.stdout)
-        )
-        answer = input(cont).strip().lower()
-        if answer not in {"", "y", "yes", "s", "si", "sí"}:
-            raise UserAborted(t("user_aborted"))
     return init_prompt(message, color)
 
 
@@ -772,7 +768,8 @@ class Pipeline:
         print(colour_text(message, CYAN, self._colour_enabled()))
 
     def tutor_prompt(self, explanation: str, prompt_message: str) -> str:
-        self.explain(explanation)
+        # Cyan context + green answer field; no Continue? — the prompt is the gate.
+        self.explain(explanation, ask_continue=False)
         return self.prompt(prompt_message)
 
     def tutor_confirm(self, explanation: str, confirm_message: str) -> None:
@@ -809,7 +806,10 @@ class Pipeline:
                 t("return_skipped_yes", pipeline=self.dev, branch=start)
             )
             return
-        self.explain(t("explain_return", pipeline=self.dev, branch=start))
+        self.explain(
+            t("explain_return", pipeline=self.dev, branch=start),
+            ask_continue=False,
+        )
         if not self.ask_yes_no(t("confirm_return", branch=start), default_yes=True):
             return
         status = self.git("status", "--porcelain", capture=True, cwd=self.root)
@@ -1063,7 +1063,8 @@ class Pipeline:
                     source=source,
                     target=target,
                     detail=t("promote_gate_non_github"),
-                )
+                ),
+                ask_continue=False,
             )
             self.tutor_confirm(
                 t("explain_promote", source=source, target=target),
@@ -1085,7 +1086,8 @@ class Pipeline:
                 branch=gate.branch,
                 visibility=gate.visibility,
                 mode=mode_label,
-            )
+            ),
+            ask_continue=False,
         )
         if gate.requires_pull_request:
             self.tutor_confirm(
@@ -1245,7 +1247,8 @@ class Pipeline:
                     + "\n"
                     + supagit_menu.render_sweeper_menu(
                         inventory, current_branch=current
-                    )
+                    ),
+                    ask_continue=False,
                 )
             else:
                 print(notice)
@@ -1262,10 +1265,13 @@ class Pipeline:
                 )
             else:
                 current = self.original_branch or None
+                # Menu is context for the integrate/pipeline prompts; those green
+                # fields are the gates — no Continue? after the cyan list.
                 self.explain(
                     supagit_menu.render_sweeper_menu(
                         inventory, current_branch=current
-                    )
+                    ),
+                    ask_continue=False,
                 )
                 integrate_line = self.tutor_prompt(
                     t("explain_integrate"),

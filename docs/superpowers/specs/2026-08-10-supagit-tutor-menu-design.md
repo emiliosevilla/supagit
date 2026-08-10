@@ -39,15 +39,17 @@ No cyan on green input lines. No green on tutor blocks.
 
 Add on `Pipeline` (or thin helpers used by `Pipeline`):
 
-- `explain(message: str) -> None` — print cyan (color-gated).
-- `tutor_prompt(explanation: str, prompt_message: str) -> str` — `explain` then green `prompt`.
-- `tutor_confirm(explanation: str, confirm_message: str) -> None` — `explain` then green `confirm`.
+- `explain(message: str, *, ask_continue: bool = True, force_confirm: bool = False) -> None` — print cyan; optionally green Continue?.
+- `tutor_prompt(explanation: str, prompt_message: str) -> str` — cyan then green `prompt` (**no** Continue?; the answer field is the gate).
+- `tutor_confirm(explanation: str, confirm_message: str) -> None` — cyan then green `confirm` (**no** Continue?; the Sí/No is the gate).
 
 Under `--yes`, `confirm` remains a no-op. Under `--dry-run`, routine
 Continue? gates after cyan tutor text are **skipped** so the preview can
 reach the plan without extra prompts; the numbered **execution plan** still
 uses a forced confirm so the user can review before the dry-run walk continues.
 The welcome banner also gets a Continue? in interactive non-dry-run runs.
+Do **not** insert Continue? when the next input is already a green
+`prompt`/`confirm` for the same decision.
 
 Every interactive question gets an i18n pair: `explain_*` + existing/short confirm/prompt key.
 

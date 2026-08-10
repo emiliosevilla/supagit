@@ -181,9 +181,11 @@ supagit
 
 Unless `--no-sweep` is passed, an interactive menu selects for **this run
 only** (not persisted). The menu and execution plan are printed in **cyan**
-(tutor context). After the welcome banner and after every later cyan block,
-`supagit` asks a green **Continue?** / **¿Continuar?** (`[Y/n]` / `[S/n]`;
-Enter = yes) before moving on. Under `--dry-run`, those routine Continues are
+(tutor context). After the welcome banner and after cyan blocks that are **not**
+immediately followed by a green decision prompt, `supagit` asks a green
+**Continue?** / **¿Continuar?** (`[Y/n]` / `[S/n]`; Enter = yes). When cyan is
+paired with a green answer field (`tutor_prompt` / `tutor_confirm`), that field
+is the only gate — no extra Continue?. Under `--dry-run`, routine Continues are
 skipped so the preview can reach the plan without extra gates; only the
 numbered **execution plan** still asks for confirmation. User answers to
 questions (commit message, branch picks, etc.) are also **green** prompts.

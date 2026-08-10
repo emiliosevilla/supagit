@@ -69,19 +69,18 @@ class BranchDiscoveryTests(unittest.TestCase):
             color="always",
         )
         with patch(
-            "builtins.input", side_effect=["", "release message"]
+            "builtins.input", return_value="release message"
         ) as mocked_input:
             pipeline.dev = "main"
             message = pipeline._commit_message()
 
         self.assertEqual(message, "release message")
-        self.assertEqual(mocked_input.call_count, 2)
+        self.assertEqual(mocked_input.call_count, 1)
         prompt = mocked_input.call_args.args[0]
         self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
         self.assertTrue(prompt.endswith(MODULE.Pipeline.RESET))
         self.assertIn("Commit message for main: ", prompt)
-        continue_prompt = mocked_input.call_args_list[0].args[0]
-        self.assertIn("Continue?", continue_prompt)
+        self.assertNotIn("Continue?", prompt)
 
     def test_success_status_uses_green_when_color_is_forced(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -156,7 +155,36 @@ class BranchDiscoveryTests(unittest.TestCase):
         mocked_print.assert_called_once()
         mocked_input.assert_not_called()
 
-    def test_tutor_confirm_prints_cyan_then_green_confirm(self) -> None:
+    def test_tutor_prompt_skips_continue_before_answer(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "always")
+        with patch("builtins.print") as mocked_print, patch(
+            "builtins.input", return_value="none"
+        ) as mocked_input:
+            answer = pipeline.tutor_prompt("Pick branches.", "Integrate: ")
+        self.assertEqual(answer, "none")
+        mocked_print.assert_called_once_with(
+            f"{MODULE.CYAN}Pick branches.{MODULE.RESET}"
+        )
+        self.assertEqual(mocked_input.call_count, 1)
+        prompt = mocked_input.call_args.args[0]
+        self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
+        self.assertIn("Integrate:", prompt)
+        self.assertNotIn("Continue?", prompt)
+
+    def test_init_tutor_prompt_skips_continue_before_answer(self) -> None:
+        with patch("builtins.print") as mocked_print, patch(
+            "builtins.input", return_value="supabase"
+        ) as mocked_input:
+            answer = MODULE.init_tutor_prompt(
+                "Choose backend.", "Backend: ", "always"
+            )
+        self.assertEqual(answer, "supabase")
+        mocked_print.assert_called_once()
+        self.assertEqual(mocked_input.call_count, 1)
+        self.assertIn("Backend:", mocked_input.call_args.args[0])
+        self.assertNotIn("Continue?", mocked_input.call_args.args[0])
+
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.options = MODULE.Options(False, False, None, None, "always")
         with patch("builtins.print") as mocked_print, patch("builtins.input", return_value="") as mocked_input:

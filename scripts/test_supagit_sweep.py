@@ -956,7 +956,9 @@ class OrchestrationTests(unittest.TestCase):
 
         pipeline.git = git  # type: ignore[method-assign]
 
-        def capture_explain(message: str, *, ask_continue: bool = True) -> None:
+        def capture_explain(
+            message: str, *, ask_continue: bool = True, force_confirm: bool = False
+        ) -> None:
             explained.append(message)
 
         pipeline.explain = capture_explain  # type: ignore[method-assign]
@@ -1329,7 +1331,7 @@ class OrchestrationTests(unittest.TestCase):
             raise AssertionError(args)
 
         pipeline.git = git  # type: ignore[method-assign]
-        pipeline.explain = explained.append  # type: ignore[method-assign]
+        pipeline.explain = lambda message, **_kwargs: explained.append(message)  # type: ignore[method-assign]
         pipeline.announce_launch_checkout()
         self.assertEqual(len(explained), 1)
         self.assertIn("feature/x", explained[0])
@@ -1387,7 +1389,7 @@ class OrchestrationTests(unittest.TestCase):
             return ""
 
         pipeline.git = git  # type: ignore[method-assign]
-        pipeline.explain = explained.append  # type: ignore[method-assign]
+        pipeline.explain = lambda message, **_kwargs: explained.append(message)  # type: ignore[method-assign]
         pipeline.maybe_return_to_start_branch()
         self.assertEqual(calls, [])
         self.assertTrue(any("--yes" in e for e in explained))
@@ -1451,7 +1453,7 @@ class OrchestrationTests(unittest.TestCase):
             )
 
         pipeline.build_inventory = build_inventory  # type: ignore[method-assign]
-        pipeline.explain = printed.append  # type: ignore[method-assign]
+        pipeline.explain = lambda message, **_kwargs: printed.append(message)  # type: ignore[method-assign]
         import builtins
 
         original_print = builtins.print
@@ -1631,7 +1633,7 @@ class OrchestrationTests(unittest.TestCase):
             calls.append(f"direct:{source}->{target}")
 
         pipeline.git = git  # type: ignore[method-assign]
-        pipeline.explain = explained.append  # type: ignore[method-assign]
+        pipeline.explain = lambda message, **_kwargs: explained.append(message)  # type: ignore[method-assign]
         pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
         pipeline._promote_via_pr = promote_via_pr  # type: ignore[method-assign]
         pipeline._promote_direct = promote_direct  # type: ignore[method-assign]
