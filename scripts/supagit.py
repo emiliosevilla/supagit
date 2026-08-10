@@ -111,6 +111,20 @@ def colour_text(text: str, colour: str, enabled: bool) -> str:
     return f"{colour}{text}{RESET}" if enabled else text
 
 
+_YES_ANSWERS = frozenset({"", "y", "yes", "s", "si", "sí"})
+
+
+def confirm_default_yes(message: str, *, colour_on: bool) -> None:
+    """Green [Y/n] gate; empty Enter accepts. Shared by Pipeline and welcome."""
+    prompt = f"{message}{t('confirm_suffix')}"
+    if colour_on:
+        prompt = f"{GREEN}{prompt}{RESET}"
+    answer = input(prompt).strip().lower()
+    if answer in _YES_ANSWERS:
+        return
+    raise UserAborted(t("user_aborted"))
+
+
 def init_project_config(
     backend: str,
     pre_ref_env: str,
@@ -732,14 +746,7 @@ class Pipeline:
             return
         if self.options.dry_run and not force:
             return
-        prompt = f"{message}{t('confirm_suffix')}"
-        if self._colour_enabled():
-            prompt = f"{self.GREEN}{prompt}{self.RESET}"
-        answer = input(prompt).strip().lower()
-        # Empty Enter defaults to yes (y/yes and Spanish s/si/sí).
-        if answer in {"", "y", "yes", "s", "si", "sí"}:
-            return
-        raise UserAborted(t("user_aborted"))
+        confirm_default_yes(message, colour_on=self._colour_enabled())
 
     def ask_yes_no(self, message: str, *, default_yes: bool = True) -> bool:
         """Optional yes/no that does not abort the run on 'no'."""
@@ -751,7 +758,7 @@ class Pipeline:
         if self._colour_enabled():
             prompt = f"{self.GREEN}{prompt}{self.RESET}"
         answer = input(prompt).strip().lower()
-        if answer in {"", "y", "yes", "s", "si", "sí"}:
+        if answer in _YES_ANSWERS:
             return True
         if answer in {"n", "no"}:
             return False
@@ -1621,12 +1628,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print_welcome(colour_enabled=colour_enabled(options.color, sys.stdout))
         if not options.yes and not options.dry_run:
             # Welcome is the first cyan block; gate before any further work.
-            prompt = t("confirm_continue") + t("confirm_suffix")
-            if colour_enabled(options.color, sys.stdout):
-                prompt = f"{GREEN}{prompt}{RESET}"
-            answer = input(prompt).strip().lower()
-            if answer not in {"", "y", "yes", "s", "si", "sí"}:
-                raise UserAborted(t("user_aborted"))
+            confirm_default_yes(
+                t("confirm_continue"),
+                colour_on=colour_enabled(options.color, sys.stdout),
+            )
 
         if args.command == "init":
             return initialise_project(args, options)

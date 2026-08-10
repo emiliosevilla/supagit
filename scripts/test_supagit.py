@@ -185,6 +185,7 @@ class BranchDiscoveryTests(unittest.TestCase):
         self.assertIn("Backend:", mocked_input.call_args.args[0])
         self.assertNotIn("Continue?", mocked_input.call_args.args[0])
 
+    def test_tutor_confirm_prints_cyan_then_green_confirm(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.options = MODULE.Options(False, False, None, None, "always")
         with patch("builtins.print") as mocked_print, patch("builtins.input", return_value="") as mocked_input:
@@ -623,8 +624,10 @@ class WelcomeAndBusyTests(unittest.TestCase):
                                     with self.assertRaises(SystemExit):
                                         MODULE.main(["--lang", "en", "--yes", "--no-sweep"])
         spinner_cls.assert_called()
-        self.assertTrue(spinner_cls.call_args.kwargs.get("enabled") in {True, False})
-        self.assertEqual(spinner_cls.call_args.kwargs.get("delay_s"), 0.0)
+        kwargs = spinner_cls.call_args.kwargs
+        self.assertIn("enabled", kwargs)
+        self.assertIsInstance(kwargs["enabled"], bool)
+        self.assertEqual(kwargs.get("delay_s"), 0.0)
         pull.assert_called_once_with(source)
         execve.assert_called_once()
 
@@ -748,6 +751,19 @@ class CheckoutFlexTests(unittest.TestCase):
         # for plan with force=True, but welcome itself must not call input here
         # because Pipeline is mocked.
         mocked_input.assert_not_called()
+
+    def test_main_welcome_continue_skipped_under_yes(self) -> None:
+        with patch.object(MODULE.supagit_i18n, "ensure_language", return_value="en"):
+            with patch.object(MODULE, "print_welcome"):
+                with patch.object(MODULE, "needs_skip_update", return_value=True):
+                    with patch("builtins.input") as mocked_input:
+                        with patch.object(MODULE, "Pipeline") as pipeline_cls:
+                            pipeline_cls.return_value.run.return_value = None
+                            code = MODULE.main(["--lang", "en", "--no-sweep", "--yes"])
+        self.assertEqual(code, 0)
+        mocked_input.assert_not_called()
+
+    def test_legacy_branch_detection_names_config_path(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.config = {
             "branches": {"dev": None, "pre": None, "prod": None},

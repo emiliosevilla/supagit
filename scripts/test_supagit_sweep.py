@@ -1587,6 +1587,40 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn(".supagit.json", text)
         self.assertIn("independent", text.lower())
 
+    def test_run_branch_menu_forces_plan_confirm_under_dry_run(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=False,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.branches = ("dev", "pre", "prod")
+        pipeline.remote = "origin"
+        pipeline.original_branch = "dev"
+        explain_kwargs: list[dict] = []
+
+        def capture_explain(
+            message: str, *, ask_continue: bool = True, force_confirm: bool = False
+        ) -> None:
+            explain_kwargs.append(
+                {"ask_continue": ask_continue, "force_confirm": force_confirm}
+            )
+
+        pipeline.explain = capture_explain  # type: ignore[method-assign]
+        pipeline.tutor_prompt = lambda explanation, prompt: ""  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+
+        selection = pipeline.run_branch_menu(_fake_inventory())
+        self.assertEqual(selection.pipeline, ("dev", "pre", "prod"))
+        self.assertGreaterEqual(len(explain_kwargs), 2)
+        # Menu list: no Continue?; execution plan: force_confirm for dry-run gate.
+        self.assertEqual(explain_kwargs[0]["ask_continue"], False)
+        self.assertFalse(explain_kwargs[0]["force_confirm"])
+        plan_call = explain_kwargs[-1]
+        self.assertTrue(plan_call["force_confirm"])
+
     def test_menu_rejects_unknown_branch(self) -> None:
         with self.assertRaises(supagit_menu.MenuError) as ctx:
             supagit_menu.parse_pipeline_line(
