@@ -28,6 +28,7 @@ import supagit_layout
 import supagit_menu
 import supagit_sweep
 import supagit_update
+from supagit_busy import BusySpinner, print_welcome
 from supagit_i18n import t
 from supagit_inventory import RepoInventory
 from supagit_menu import MenuSelection
@@ -618,13 +619,18 @@ class Pipeline:
         print(f"$ {rendered}")
         if self.options.dry_run and mutating:
             return ""
-        completed = subprocess.run(
-            [str(part) for part in command],
-            cwd=str(cwd or getattr(self, "root", Path.cwd())),
-            text=True,
-            stdout=subprocess.PIPE if capture else None,
-            stderr=subprocess.PIPE,
+        spinner_enabled = (
+            colour_enabled(self.options.color, sys.stderr)
+            and sys.stderr.isatty()
         )
+        with BusySpinner(enabled=spinner_enabled):
+            completed = subprocess.run(
+                [str(part) for part in command],
+                cwd=str(cwd or getattr(self, "root", Path.cwd())),
+                text=True,
+                stdout=subprocess.PIPE if capture else None,
+                stderr=subprocess.PIPE,
+            )
         if capture and completed.stdout:
             print(completed.stdout, end="")
         if completed.returncode != 0 and check:
@@ -1212,6 +1218,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ShipError(t("lang_invalid", value=key)) from exc
         except ValueError as exc:
             raise ShipError(t("lang_invalid", value=str(exc))) from exc
+
+        print_welcome(colour_enabled=colour_enabled(options.color, sys.stdout))
 
         if args.command == "init":
             return initialise_project(args, options)

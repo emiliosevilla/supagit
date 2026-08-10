@@ -444,5 +444,50 @@ class I18nAndUpdateTests(unittest.TestCase):
             self.assertFalse(MODULE.needs_skip_update())
 
 
+class WelcomeAndBusyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        MODULE.supagit_i18n.set_lang("en")
+
+    def test_welcome_banner_includes_name_and_author(self) -> None:
+        from io import StringIO
+
+        stream = StringIO()
+        MODULE.print_welcome(colour_enabled=False, stream=stream)
+        text = stream.getvalue()
+        self.assertIn("supagit", text)
+        self.assertIn("Author: Emilio Sevilla", text)
+        self.assertIn("Ctrl+C", text)
+
+    def test_welcome_banner_spanish(self) -> None:
+        from io import StringIO
+
+        MODULE.supagit_i18n.set_lang("es")
+        stream = StringIO()
+        MODULE.print_welcome(colour_enabled=False, stream=stream)
+        text = stream.getvalue()
+        self.assertIn("Autor: Emilio Sevilla", text)
+        self.assertIn("trabajando", MODULE.t("busy_working"))
+
+    def test_busy_spinner_disabled_is_noop(self) -> None:
+        from io import StringIO
+
+        stream = StringIO()
+        with MODULE.BusySpinner(enabled=False, stream=stream, delay_s=0.0):
+            pass
+        self.assertEqual(stream.getvalue(), "")
+
+    def test_busy_spinner_writes_cyan_working_line(self) -> None:
+        from io import StringIO
+        import time
+
+        stream = StringIO()
+        with MODULE.BusySpinner(enabled=True, stream=stream, delay_s=0.0, interval_s=0.05):
+            time.sleep(0.12)
+        output = stream.getvalue()
+        self.assertIn("supagit is working", output)
+        self.assertIn("Ctrl+C", output)
+        self.assertIn(MODULE.CYAN, output)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -111,11 +111,14 @@ An optional `sweep` block in `.supagit.json` may document PR merge preferences
 ## Output and safety
 
 **Cyan** is tutor context: explanations before each interactive step, sweeper
-menu blocks, and the post-menu execution plan. **Green** is where the user
-types: confirmation prompts, commit messages, and sweeper answers. Every
-interactive `prompt` / `confirm` is preceded by a cyan explanation (skipped
-under `--yes` / non-TTY). `NO_COLOR` and `--no-color` disable color; `--color
-always` forces it. Warnings, errors, aborts, and other negative
+menu blocks, the post-menu execution plan, the startup welcome banner, and the
+busy spinner. **Green** is where the user types: confirmation prompts, commit
+messages, and sweeper answers. After language selection, a short welcome shows
+the command name, goal, author, and tips. While a long child command runs, a
+cyan same-line spinner shows that supagit is working and that Ctrl+C aborts.
+Every interactive `prompt` / `confirm` is preceded by a cyan explanation
+(skipped under `--yes` / non-TTY). `NO_COLOR` and `--no-color` disable color;
+`--color always` forces it. Warnings, errors, aborts, and other negative
 manual-intervention messages are red under the same color policy.
 
 The final success line is green. Final `ERROR` and `ABORTED` lines are red when

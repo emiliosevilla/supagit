@@ -123,6 +123,18 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "local_branches_header": "Local branches",
         "tag_pipeline": "[P]",
         "tag_feature": "[F]",
+        "welcome_banner": (
+            "supagit\n"
+            "Fail-closed Git promotion sweeper: integrate work, publish, check, migrate, promote.\n"
+            "Author: Emilio Sevilla\n"
+            "\n"
+            "Tips:\n"
+            "  • Cyan text explains what will happen; green is where you answer.\n"
+            "  • Press Enter to accept defaults; n / no cancels a confirmation.\n"
+            "  • Press Ctrl+C anytime to abort."
+        ),
+        "busy_working": "supagit is working…",
+        "busy_abort_hint": "(Ctrl+C to abort)",
     },
     "es": {
         "lang_menu": "Language / Idioma:\n  (1) English\n  (2) Español\nOpción [1/2]: ",
@@ -236,6 +248,18 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "local_branches_header": "Ramas locales",
         "tag_pipeline": "[P]",
         "tag_feature": "[F]",
+        "welcome_banner": (
+            "supagit\n"
+            "Coche escoba fail-closed de Git: integrar trabajo, publicar, comprobar, migrar, promover.\n"
+            "Autor: Emilio Sevilla\n"
+            "\n"
+            "Consejos:\n"
+            "  • El texto cyan explica qué va a pasar; el verde es donde respondes.\n"
+            "  • Pulsa Enter para aceptar valores por defecto; n / no cancela una confirmación.\n"
+            "  • Pulsa Ctrl+C en cualquier momento para abortar."
+        ),
+        "busy_working": "supagit está trabajando…",
+        "busy_abort_hint": "(Ctrl+C para abortar)",
     },
 }
 
