@@ -939,7 +939,11 @@ class OrchestrationTests(unittest.TestCase):
             raise AssertionError(f"unexpected git call: {args}")
 
         pipeline.git = git  # type: ignore[method-assign]
-        pipeline.explain = explained.append  # type: ignore[method-assign]
+
+        def capture_explain(message: str, *, ask_continue: bool = True) -> None:
+            explained.append(message)
+
+        pipeline.explain = capture_explain  # type: ignore[method-assign]
         pipeline.confirm = lambda message: None  # type: ignore[method-assign]
         return pipeline, calls, explained
 

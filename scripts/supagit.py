@@ -160,8 +160,18 @@ def init_prompt(message: str, color: str) -> str:
     return input(prompt).strip()
 
 
-def init_tutor_prompt(explanation: str, message: str, color: str) -> str:
+def init_tutor_prompt(
+    explanation: str, message: str, color: str, *, yes: bool = False
+) -> str:
     print(colour_text(explanation, CYAN, colour_enabled(color, sys.stdout)))
+    if not yes:
+        suffix = t("confirm_suffix")
+        cont = colour_text(
+            t("confirm_continue") + suffix, GREEN, colour_enabled(color, sys.stdout)
+        )
+        answer = input(cont).strip().lower()
+        if answer not in {"", "y", "yes", "s", "si", "sí"}:
+            raise UserAborted(t("user_aborted"))
     return init_prompt(message, color)
 
 
@@ -183,7 +193,9 @@ def initialise_project(args: argparse.Namespace, options: Options) -> int:
         if not sys.stdin.isatty():
             raise ShipError("supagit init requires --backend none|supabase when no TTY is available.")
         backend = (
-            init_tutor_prompt(t("explain_backend"), t("backend_prompt"), options.color).lower()
+            init_tutor_prompt(
+                t("explain_backend"), t("backend_prompt"), options.color, yes=options.yes
+            ).lower()
             or "none"
         )
     if backend not in {"none", "supabase"}:
@@ -196,12 +208,14 @@ def initialise_project(args: argparse.Namespace, options: Options) -> int:
             "Environment variable name holding the Supabase pre/staging project ref.",
             f"Variable for Supabase pre project ref ({pre_ref_env}): ",
             options.color,
+            yes=options.yes,
         ) or pre_ref_env
     if backend == "supabase" and args.prod_ref_env is None and sys.stdin.isatty():
         prod_ref_env = init_tutor_prompt(
             "Environment variable name holding the Supabase production project ref.",
             f"Variable for Supabase prod project ref ({prod_ref_env}): ",
             options.color,
+            yes=options.yes,
         ) or prod_ref_env
 
     branch_names = None
@@ -744,7 +758,12 @@ class Pipeline:
             return False
         return default_yes
 
-    def explain(self, message: str) -> None:
+    def explain(self, message: str, *, ask_continue: bool = True) -> None:
+        self._print_cyan(message)
+        if ask_continue:
+            self.confirm(t("confirm_continue"))
+
+    def _print_cyan(self, message: str) -> None:
         print(colour_text(message, CYAN, self._colour_enabled()))
 
     def tutor_prompt(self, explanation: str, prompt_message: str) -> str:
@@ -754,7 +773,8 @@ class Pipeline:
     def tutor_confirm(self, explanation: str, confirm_message: str) -> None:
         if self.options.yes:
             return
-        self.explain(explanation)
+        # Cyan block + one green Sí/No (action-specific text; default yes).
+        self.explain(explanation, ask_continue=False)
         self.confirm(confirm_message)
 
     def prompt(self, message: str) -> str:
@@ -1264,8 +1284,10 @@ class Pipeline:
                         first_branch=selection.pipeline[0],
                         remote=self.remote,
                     )
+                    + "\n"
+                    + t("explain_plan")
                 )
-                self.tutor_confirm(t("explain_plan"), t("confirm_plan"))
+                # explain() already asks confirm_continue (default yes).
         except supagit_menu.MenuError as exc:
             raise ShipError(str(exc)) from exc
 
