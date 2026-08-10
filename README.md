@@ -262,16 +262,16 @@ integration uses GitHub merge commits via `gh` and requires `gh` to be available
 
 ## Output and safety
 
-- **Cyan** — tutor explanations, menu context, execution plans, welcome banner,
-  and the busy spinner.
-- **Green** — where you type: confirmation prompts, commit messages, and
-  sweeper answers.
+- **Cyan** — tutor explanations, menu context, execution plans, and welcome banner.
+- **Green** — where you type: confirmation prompts, commit messages, sweeper
+  answers, and the busy spinner.
 - Successful completion is green.
 - Warnings, errors, aborts, and negative manual-intervention messages are red.
 - After language selection, a short welcome shows the command name, goal,
   author, and tips.
-- While a long command runs, a cyan same-line spinner shows
-  `supagit is working… (Ctrl+C to abort)` (Spanish when `--lang es`).
+- While a long command runs (including auto-update pull/reinstall), a green
+  same-line spinner shows `supagit is working… (Ctrl+C to abort)` (Spanish when
+  `--lang es`).
 - Every interactive prompt is preceded by a cyan explanation of what will
   happen if you proceed (skipped under `--yes` / non-TTY).
 - `NO_COLOR` and `--no-color` disable color; `--color always` forces it.
