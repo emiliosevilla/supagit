@@ -11,6 +11,7 @@ GitRunner = Callable[..., str]
 RejectSensitive = Callable[[Sequence[str]], None]
 
 PR_BODY = "Integrated by supagit sweeper."
+PROMOTE_PR_BODY = "Promoted by supagit."
 
 
 class SweepError(RuntimeError):
@@ -34,6 +35,131 @@ class CleanupItem:
 @dataclass(frozen=True)
 class CleanupPlan:
     items: tuple[CleanupItem, ...]
+
+
+@dataclass(frozen=True)
+class PromoteGate:
+    """How a pipeline destination branch must be updated on GitHub."""
+
+    owner: str
+    repo: str
+    branch: str
+    visibility: str
+    requires_pull_request: bool
+    rule_types: tuple[str, ...]
+
+    @property
+    def mode(self) -> str:
+        return "pull_request" if self.requires_pull_request else "direct"
+
+
+def parse_github_owner_repo(remote_url: str) -> tuple[str, str] | None:
+    """Return (owner, repo) for GitHub remotes, else None."""
+    raw = remote_url.strip()
+    if not raw:
+        return None
+    normalized = raw.replace("\\", "/")
+    lower = normalized.lower()
+    if "github.com" not in lower:
+        return None
+    # git@github.com:owner/repo.git
+    if lower.startswith("git@github.com:"):
+        path = normalized.split(":", 1)[1]
+    elif "github.com/" in lower:
+        path = normalized.split("github.com/", 1)[1]
+    else:
+        return None
+    path = path.removeprefix("/").removesuffix(".git")
+    parts = [p for p in path.split("/") if p]
+    if len(parts) < 2:
+        return None
+    return parts[0], parts[1]
+
+
+def _gh_api_json(run_raw: Callable[..., str], endpoint: str) -> object:
+    import json
+
+    output = run_raw(["gh", "api", endpoint]).strip()
+    if not output:
+        return None
+    return json.loads(output)
+
+
+def inspect_promote_gate(
+    run_raw: Callable[..., str],
+    remote_url: str,
+    branch: str,
+) -> PromoteGate | None:
+    """Inspect GitHub visibility + branch rules for *branch*.
+
+    Returns None when the remote is not GitHub (caller keeps the direct
+    merge+push path). Raises SweepError when GitHub cannot be queried.
+    """
+    from urllib.parse import quote
+
+    slug = parse_github_owner_repo(remote_url)
+    if slug is None:
+        return None
+    owner, repo = slug
+    try:
+        meta = _gh_api_json(run_raw, f"repos/{owner}/{repo}")
+    except Exception as exc:
+        raise SweepError(
+            f"Could not read GitHub repository metadata for {owner}/{repo}."
+        ) from exc
+    visibility = "unknown"
+    if isinstance(meta, dict):
+        raw_vis = meta.get("visibility")
+        if raw_vis:
+            visibility = str(raw_vis)
+        elif meta.get("private") is True:
+            visibility = "private"
+        elif meta.get("private") is False:
+            visibility = "public"
+
+    rule_types: list[str] = []
+    requires_pr = False
+    encoded_branch = quote(branch, safe="")
+    try:
+        rules = _gh_api_json(
+            run_raw, f"repos/{owner}/{repo}/rules/branches/{encoded_branch}"
+        )
+        if isinstance(rules, list):
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
+                rtype = str(rule.get("type") or "")
+                if rtype:
+                    rule_types.append(rtype)
+                if rtype == "pull_request":
+                    requires_pr = True
+    except Exception:
+        # Rulesets API may be unavailable (older plans / permissions); fall back.
+        rules = None
+
+    if not requires_pr:
+        try:
+            protection = _gh_api_json(
+                run_raw,
+                f"repos/{owner}/{repo}/branches/{encoded_branch}/protection",
+            )
+            if isinstance(protection, dict):
+                rule_types.append("classic_protection")
+                reviews = protection.get("required_pull_request_reviews")
+                if reviews:
+                    requires_pr = True
+                    rule_types.append("required_pull_request_reviews")
+        except Exception:
+            pass
+
+    return PromoteGate(
+        owner=owner,
+        repo=repo,
+        branch=branch,
+        visibility=visibility,
+        requires_pull_request=requires_pr,
+        rule_types=tuple(dict.fromkeys(rule_types)),
+    )
 
 
 def ahead_behind(run_git: GitRunner, local: str, remote_ref: str) -> tuple[int, int]:
@@ -205,12 +331,39 @@ class GhClient:
             raise SweepError(f"Could not create pull request for {head} into {base}.")
         return int(output)
 
-    def merge_pr(self, number: int) -> None:
+    def merge_pr(self, number: int, *, delete_branch: bool = True) -> None:
         if self._dry_run:
             return
-        self._run_raw(
-            ["gh", "pr", "merge", str(number), "--merge", "--delete-branch"]
-        )
+        command = ["gh", "pr", "merge", str(number), "--merge"]
+        if delete_branch:
+            command.append("--delete-branch")
+        self._run_raw(command)
+
+    def create_promote_pr(self, head: str, base: str, title: str) -> int:
+        if self._dry_run:
+            return 0
+        output = self._run_raw(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--base",
+                base,
+                "--head",
+                head,
+                "--title",
+                title,
+                "--body",
+                PROMOTE_PR_BODY,
+                "--json",
+                "number",
+                "--jq",
+                ".number",
+            ]
+        ).strip()
+        if not output:
+            raise SweepError(f"Could not create pull request for {head} into {base}.")
+        return int(output)
 
 
 def commit_dirty_tree(

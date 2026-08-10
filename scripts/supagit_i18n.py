@@ -59,6 +59,26 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "explain_promote": (
             "This merges {source} into {target} on the remote and publishes {target}."
         ),
+        "explain_promote_direct": (
+            "This merges {source} into {target} locally and pushes {target} ({detail})."
+        ),
+        "explain_promote_pr": (
+            "GitHub protects {target} ({visibility}): I will open or reuse a pull request "
+            "from {source} into {target} and merge it. I will not use admin bypass."
+        ),
+        "promote_gate_summary": (
+            "GitHub {owner}/{repo} is {visibility}; updating {branch} uses {mode}."
+        ),
+        "promote_gate_non_github": "remote is not GitHub",
+        "promote_mode_pr": "a pull request (branch rules require it)",
+        "promote_mode_direct": "a direct merge and push",
+        "promote_pr_created": "Opened pull request #{number}: {source} → {target}.",
+        "promote_pr_reused": "Reusing open pull request #{number}: {source} → {target}.",
+        "error_promote_pr_needs_approval": (
+            "Pull request #{number} ({source} → {target}) could not be merged automatically. "
+            "Approve it as code owner (or satisfy the branch rules), then re-run supagit. "
+            "supagit never uses admin bypass."
+        ),
         "explain_cleanup": (
             "Optional step: remove worktrees and branches that were already merged "
             "and are safe to delete."
@@ -280,6 +300,26 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "explain_promote": (
             "Esto fusionará {source} en {target} en el remoto y publicará {target}."
+        ),
+        "explain_promote_direct": (
+            "Esto fusionará {source} en {target} en local y subirá {target} ({detail})."
+        ),
+        "explain_promote_pr": (
+            "GitHub protege {target} ({visibility}): abriré o reutilizaré un pull request "
+            "de {source} a {target} y lo fusionaré. No usaré bypass de administrador."
+        ),
+        "promote_gate_summary": (
+            "GitHub {owner}/{repo} es {visibility}; actualizar {branch} usa {mode}."
+        ),
+        "promote_gate_non_github": "el remoto no es GitHub",
+        "promote_mode_pr": "un pull request (las reglas de rama lo exigen)",
+        "promote_mode_direct": "una fusión y push directos",
+        "promote_pr_created": "Pull request #{number} abierto: {source} → {target}.",
+        "promote_pr_reused": "Reutilizando pull request abierto #{number}: {source} → {target}.",
+        "error_promote_pr_needs_approval": (
+            "El pull request #{number} ({source} → {target}) no se pudo fusionar automáticamente. "
+            "Apruébalo como code owner (o cumple las reglas de la rama) y vuelve a ejecutar "
+            "supagit. supagit nunca usa bypass de administrador."
         ),
         "explain_cleanup": (
             "Paso opcional: eliminar worktrees y ramas ya fusionadas que se pueden borrar con seguridad."

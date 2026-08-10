@@ -424,6 +424,77 @@ class GhClientTests(unittest.TestCase):
             ["gh", "pr", "merge", "42", "--merge", "--delete-branch"],
         )
 
+    def test_merge_pr_can_keep_head_branch(self) -> None:
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            return ""
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        client.merge_pr(7, delete_branch=False)
+        self.assertEqual(calls[0], ["gh", "pr", "merge", "7", "--merge"])
+
+    def test_parse_github_owner_repo(self) -> None:
+        self.assertEqual(
+            supagit_sweep.parse_github_owner_repo("git@github.com:acme/demo.git"),
+            ("acme", "demo"),
+        )
+        self.assertEqual(
+            supagit_sweep.parse_github_owner_repo("https://github.com/acme/demo"),
+            ("acme", "demo"),
+        )
+        self.assertIsNone(
+            supagit_sweep.parse_github_owner_repo("git@gitlab.com:acme/demo.git")
+        )
+
+    def test_inspect_promote_gate_detects_pull_request_rule(self) -> None:
+        import json
+
+        def run_raw(cmd, **kwargs):
+            endpoint = cmd[2]
+            if endpoint.endswith("/demo") or endpoint == "repos/acme/demo":
+                return json.dumps({"visibility": "public", "private": False})
+            if "rules/branches" in endpoint:
+                return json.dumps([{"type": "pull_request"}, {"type": "deletion"}])
+            raise AssertionError(endpoint)
+
+        gate = supagit_sweep.inspect_promote_gate(
+            run_raw, "git@github.com:acme/demo.git", "main"
+        )
+        assert gate is not None
+        self.assertTrue(gate.requires_pull_request)
+        self.assertEqual(gate.mode, "pull_request")
+        self.assertEqual(gate.visibility, "public")
+        self.assertIn("pull_request", gate.rule_types)
+
+    def test_inspect_promote_gate_unprotected_is_direct(self) -> None:
+        import json
+
+        def run_raw(cmd, **kwargs):
+            endpoint = cmd[2]
+            if endpoint == "repos/acme/demo":
+                return json.dumps({"visibility": "private", "private": True})
+            if "rules/branches" in endpoint:
+                return json.dumps([])
+            if "protection" in endpoint:
+                raise RuntimeError("HTTP 404")
+            raise AssertionError(endpoint)
+
+        gate = supagit_sweep.inspect_promote_gate(
+            run_raw, "https://github.com/acme/demo.git", "main"
+        )
+        assert gate is not None
+        self.assertFalse(gate.requires_pull_request)
+        self.assertEqual(gate.mode, "direct")
+        self.assertEqual(gate.visibility, "private")
+
+    def test_inspect_promote_gate_non_github_returns_none(self) -> None:
+        gate = supagit_sweep.inspect_promote_gate(
+            lambda *a, **k: "", "git@gitlab.com:acme/demo.git", "main"
+        )
+        self.assertIsNone(gate)
+
 
 class CommitDirtyTreeTests(unittest.TestCase):
     def test_secret_rejection_short_circuits_before_commit(self) -> None:
@@ -1513,6 +1584,92 @@ class OrchestrationTests(unittest.TestCase):
             _fake_inventory(), current_branch="feature/x"
         )
         self.assertTrue(text.startswith("You are on: feature/x"))
+
+    def test_promote_uses_pr_when_gate_requires_it(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.root = Path("/repo")
+        pipeline.remote = "origin"
+        explained: list[str] = []
+        calls: list[str] = []
+
+        def git(*args, **kwargs):
+            if args[:2] == ("remote", "get-url"):
+                return "git@github.com:acme/demo.git\n"
+            return ""
+
+        def promote_via_pr(source, target, remote_url):
+            calls.append(f"pr:{source}->{target}")
+
+        def promote_direct(source, target):
+            calls.append(f"direct:{source}->{target}")
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline.explain = explained.append  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline._promote_via_pr = promote_via_pr  # type: ignore[method-assign]
+        pipeline._promote_direct = promote_direct  # type: ignore[method-assign]
+
+        with patch.object(
+            ENGINE.supagit_sweep,
+            "inspect_promote_gate",
+            return_value=ENGINE.supagit_sweep.PromoteGate(
+                owner="acme",
+                repo="demo",
+                branch="main",
+                visibility="public",
+                requires_pull_request=True,
+                rule_types=("pull_request",),
+            ),
+        ):
+            pipeline.promote("dev", "main")
+        self.assertEqual(calls, ["pr:dev->main"])
+        self.assertTrue(any("pull request" in e.lower() or "pr" in e.lower() for e in explained))
+
+    def test_promote_uses_direct_when_unprotected(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.root = Path("/repo")
+        pipeline.remote = "origin"
+        calls: list[str] = []
+
+        def git(*args, **kwargs):
+            if args[:2] == ("remote", "get-url"):
+                return "git@github.com:acme/demo.git\n"
+            return ""
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline.explain = lambda *_a, **_k: None  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline._promote_via_pr = lambda *a, **k: calls.append("pr")  # type: ignore[method-assign]
+        pipeline._promote_direct = lambda *a, **k: calls.append("direct")  # type: ignore[method-assign]
+
+        with patch.object(
+            ENGINE.supagit_sweep,
+            "inspect_promote_gate",
+            return_value=ENGINE.supagit_sweep.PromoteGate(
+                owner="acme",
+                repo="demo",
+                branch="main",
+                visibility="private",
+                requires_pull_request=False,
+                rule_types=(),
+            ),
+        ):
+            pipeline.promote("dev", "main")
+        self.assertEqual(calls, ["direct"])
 
 
 if __name__ == "__main__":

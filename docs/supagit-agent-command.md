@@ -83,6 +83,12 @@ migrate each configured destination backend when present, merge each adjacent
 branch pair, and return to the first branch. With one branch there are no merge
 or promotion steps.
 
+Before each promotion into a destination branch, `supagit` queries GitHub branch
+rules (`gh api …/rules/branches/{branch}`, with classic protection as fallback).
+If a pull-request rule applies, promotion uses a PR (no `--admin` bypass).
+Otherwise it uses local merge + push. Non-GitHub remotes always use the direct
+path.
+
 Optional cleanup at the end removes merged feature branches and linked worktrees
 when the user confirms (`--cleanup` applies without prompting when used with
 `--yes`; `--no-cleanup` skips cleanup entirely).

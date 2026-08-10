@@ -1016,11 +1016,76 @@ class Pipeline:
 
     def promote(self, source: str, target: str) -> None:
         print(f"\n=== CODE {source} → {target} ===")
-        self.fetch_branch(target)
+        remote_url = self.git(
+            "remote", "get-url", self.remote, capture=True, cwd=self.root
+        ).strip()
+        gate: supagit_sweep.PromoteGate | None = None
+        try:
+            gate = supagit_sweep.inspect_promote_gate(
+                lambda command, **_kwargs: self.run_raw(
+                    list(command), capture=True, mutating=False
+                ),
+                remote_url,
+                target,
+            )
+        except supagit_sweep.SweepError as exc:
+            raise ShipError(str(exc)) from exc
+
+        if gate is None:
+            self.explain(
+                t(
+                    "explain_promote_direct",
+                    source=source,
+                    target=target,
+                    detail=t("promote_gate_non_github"),
+                )
+            )
+            self.tutor_confirm(
+                t("explain_promote", source=source, target=target),
+                t("confirm_promote", source=source, target=target),
+            )
+            self._promote_direct(source, target)
+            return
+
+        mode_label = (
+            t("promote_mode_pr")
+            if gate.requires_pull_request
+            else t("promote_mode_direct")
+        )
+        self.explain(
+            t(
+                "promote_gate_summary",
+                owner=gate.owner,
+                repo=gate.repo,
+                branch=gate.branch,
+                visibility=gate.visibility,
+                mode=mode_label,
+            )
+        )
+        if gate.requires_pull_request:
+            self.tutor_confirm(
+                t(
+                    "explain_promote_pr",
+                    source=source,
+                    target=target,
+                    visibility=gate.visibility,
+                ),
+                t("confirm_promote", source=source, target=target),
+            )
+            try:
+                self._promote_via_pr(source, target, remote_url)
+            except supagit_sweep.SweepError as exc:
+                raise ShipError(str(exc)) from exc
+            return
+
         self.tutor_confirm(
             t("explain_promote", source=source, target=target),
             t("confirm_promote", source=source, target=target),
         )
+        self._promote_direct(source, target)
+
+    def _promote_direct(self, source: str, target: str) -> None:
+        self.fetch_branch(target)
         self.git("checkout", target, mutating=True)
         try:
             self.git("merge", source, "--no-edit", mutating=True)
@@ -1035,6 +1100,57 @@ class Pipeline:
                 file=sys.stderr,
             )
             raise
+
+    def _promote_via_pr(self, source: str, target: str, remote_url: str) -> None:
+        gh = supagit_sweep.GhClient(self._gh_run_raw, dry_run=self.options.dry_run)
+        gh.ensure_ready()
+        gh.ensure_github_remote(remote_url)
+        # Source tip must be on the remote before opening/merging the PR.
+        try:
+            self.git("checkout", source, mutating=True, cwd=self.root)
+        except Exception:
+            pass
+        supagit_sweep.push_branch(
+            self._sweep_git,
+            self.remote,
+            source,
+            cwd=self.root,
+            dry_run=self.options.dry_run,
+        )
+        pr_number = gh.find_open_pr(source, target)
+        if pr_number is None:
+            title = f"supagit: promote {source} → {target}"
+            pr_number = gh.create_promote_pr(source, target, title)
+            self.explain(t("promote_pr_created", number=pr_number, source=source, target=target))
+        else:
+            self.explain(t("promote_pr_reused", number=pr_number, source=source, target=target))
+        try:
+            gh.merge_pr(pr_number, delete_branch=False)
+        except Exception as exc:
+            raise ShipError(
+                t(
+                    "error_promote_pr_needs_approval",
+                    number=pr_number,
+                    source=source,
+                    target=target,
+                )
+            ) from exc
+        if self.options.dry_run:
+            return
+        self.git(
+            "fetch",
+            self.remote,
+            f"refs/heads/{target}:refs/heads/{target}",
+            mutating=True,
+            cwd=self.root,
+        )
+        self.git(
+            "fetch",
+            self.remote,
+            f"refs/heads/{target}:refs/remotes/{self.remote}/{target}",
+            mutating=True,
+            cwd=self.root,
+        )
 
     def return_to_dev(self) -> None:
         if self.options.dry_run:
