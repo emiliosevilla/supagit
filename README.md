@@ -201,6 +201,20 @@ The pipeline publishes local changes on the first branch, runs configured
 checks, migrates the backend configured for each destination branch when
 present, promotes each adjacent branch pair, and returns to the first branch.
 
+For each promotion into a destination branch, `supagit` asks GitHub (via `gh`)
+whether that branch is protected by an active **ruleset** or classic branch
+protection that **requires a pull request**:
+
+- **Protected (PR required)** — opens or reuses a PR `source → target`, merges
+  it with `gh`, and never uses admin bypass. If reviews/code owners block the
+  merge, the run stops with instructions to approve and re-run.
+- **Unprotected / direct push allowed** — local `git merge` + `git push` as
+  before.
+- **Non-GitHub remotes** — always the direct merge+push path.
+
+Public vs private visibility is reported in the cyan tutor text; it does not
+by itself change the mode (only branch rules do).
+
 ### Flags
 
 | Flag | Effect |
