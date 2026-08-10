@@ -1,0 +1,6 @@
+# Default owner for the whole repository.
+* @emiliosevilla
+
+# Protect ownership and GitHub metadata themselves.
+/.github/ @emiliosevilla
+/.github/CODEOWNERS @emiliosevilla
