@@ -596,7 +596,7 @@ class WelcomeAndBusyTests(unittest.TestCase):
             pass
         self.assertEqual(stream.getvalue(), "")
 
-    def test_busy_spinner_writes_cyan_working_line(self) -> None:
+    def test_busy_spinner_writes_green_working_line(self) -> None:
         from io import StringIO
         import time
 
@@ -606,7 +606,27 @@ class WelcomeAndBusyTests(unittest.TestCase):
         output = stream.getvalue()
         self.assertIn("supagit is working", output)
         self.assertIn("Ctrl+C", output)
-        self.assertIn(MODULE.CYAN, output)
+        self.assertIn(MODULE.GREEN, output)
+        self.assertNotIn(MODULE.CYAN, output)
+
+    def test_main_update_uses_spinner_while_reinstalling(self) -> None:
+        source = Path("/tmp/supagit-source")
+        with patch.object(MODULE, "needs_skip_update", return_value=False):
+            with patch.object(MODULE.supagit_update, "source_root_from_marker", return_value=source):
+                with patch.object(MODULE.supagit_update, "needs_update", return_value=True):
+                    with patch.object(MODULE.supagit_update, "pull_and_reinstall") as pull:
+                        with patch.object(MODULE, "BusySpinner") as spinner_cls:
+                            spinner_cls.return_value.__enter__.return_value = None
+                            spinner_cls.return_value.__exit__.return_value = None
+                            with patch("os.execve", side_effect=SystemExit(0)) as execve:
+                                with patch("builtins.print"):
+                                    with self.assertRaises(SystemExit):
+                                        MODULE.main(["--lang", "en", "--yes", "--no-sweep"])
+        spinner_cls.assert_called()
+        self.assertTrue(spinner_cls.call_args.kwargs.get("enabled") in {True, False})
+        self.assertEqual(spinner_cls.call_args.kwargs.get("delay_s"), 0.0)
+        pull.assert_called_once_with(source)
+        execve.assert_called_once()
 
 
 class CheckoutFlexTests(unittest.TestCase):

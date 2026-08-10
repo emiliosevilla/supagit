@@ -10,12 +10,13 @@ from typing import TextIO
 from supagit_i18n import t
 
 CYAN = "\033[36m"
+GREEN = "\033[32m"
 RESET = "\033[0m"
 _SPINNER_FRAMES = ("|", "/", "-", "\\")
 
 
 class BusySpinner:
-    """Animate a cyan status line with \\r while work runs.
+    """Animate a green status line with \\r while work runs.
 
     Quick commands (< delay_s) never show the spinner. Non-TTY or disabled
     mode is a no-op so captured CI output stays clean.
@@ -65,7 +66,7 @@ class BusySpinner:
         while not self._stop.is_set():
             frame = _SPINNER_FRAMES[index % len(_SPINNER_FRAMES)]
             line = f"{frame} {message} {abort}"
-            self.stream.write(f"\r{CYAN}{line}{RESET}\033[K")
+            self.stream.write(f"\r{GREEN}{line}{RESET}\033[K")
             self.stream.flush()
             self._shown = True
             index += 1
