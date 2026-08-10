@@ -22,7 +22,11 @@ there is one command name only.
 
 After the first installation, running `supagit` checks the registered source
 against the global copy and updates the skill automatically when it is stale.
-If the source repository has moved, run this installer again from its new path.
+At startup it also compares the source-root clone to `origin/main` on GitHub
+(`emiliosevilla/supagit`); if behind, it fast-forward pulls, reinstalls, and
+re-executes. Set `SUPAGIT_SKIP_UPDATE=1` to skip that check (tests / one-shot
+re-exec). If the source repository has moved, run this installer again from its
+new path.
 
 ## Configuration
 
@@ -90,6 +94,8 @@ For a Supabase project, use:
 supagit init --backend supabase
 ```
 
+If `.supagit.json` is missing when you run the pipeline, `supagit` auto-creates
+it (prompts for backend on a TTY; with `--yes` / non-TTY require `--backend`).
 The initializer refuses to overwrite an existing `.supagit.json`. It writes
 only backend/branch configuration; it does not install the global command or
 store Supabase IDs.
@@ -143,6 +149,8 @@ present, promotes each adjacent branch pair, and returns to the first branch.
 | Flag | Effect |
 |------|--------|
 | `--dry-run` | Print the plan without mutating Git or Supabase. |
+| `--lang en\|es` | UI language (skips the language menu). Also `SUPAGIT_LANG`. Required with `--yes` / non-TTY. |
+| `--backend` | Backend for `init` or auto-init when `.supagit.json` is missing (`none` / `supabase`). |
 | `--no-sweep` | Skip menu and feature integration; still relocate to main checkout when needed and ff-only sync the first branch. |
 | `--integrate` | Comma-separated feature branches, or `none` (non-interactive). |
 | `--pipeline` | Comma-separated ordered pipeline branches (non-interactive). |
@@ -150,6 +158,8 @@ present, promotes each adjacent branch pair, and returns to the first branch.
 | `--cleanup` | Apply optional post-run cleanup without prompting (use with `--yes`). |
 | `--no-cleanup` | Skip optional cleanup of merged features and worktrees. |
 | `-m` / `--message` | Commit message for the first branch; required with `--yes` when changes exist. |
+
+Confirmations default to Yes: Enter proceeds (`[Y/n]` / Spanish `[S/n]`).
 
 Optional cleanup at the end removes merged feature branches and linked
 worktrees when confirmed interactively, or when `--cleanup` is passed.

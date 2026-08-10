@@ -21,15 +21,21 @@ Measure the repository before any mutating step:
 5. Run `supagit --dry-run` and review the printed plan.
 6. Request explicit user confirmation before a non-dry-run run.
 
-If the target project has no `.supagit.json`, initialize it from the target
-repository with `supagit init --backend none` or
+If the target project has no `.supagit.json`, `supagit` auto-creates it
+(interactive backend prompt, or `--backend none|supabase` under `--yes` /
+non-TTY). You may also run `supagit init --backend none` or
 `supagit init --backend supabase`. The initializer never overwrites an
 existing configuration.
 
-The global launcher checks the registered source before starting the skill. If
-the installed files are stale, it updates the global skill automatically; if
-the source cannot be found, it stops with an error instead of running a known
-outdated copy silently.
+At process start, `supagit` checks the registered GitHub source-root against
+`origin/main` and, if behind, pulls ff-only, reinstalls the global skill, and
+re-executes (fail-closed if that update cannot complete). The global launcher
+also refreshes stale installed files from the registered source. Set
+`SUPAGIT_SKIP_UPDATE=1` to skip the GitHub tip check once.
+
+Choose UI language with the startup menu, `--lang en|es`, or `SUPAGIT_LANG`.
+With `--yes` / non-TTY, `--lang` or `SUPAGIT_LANG` is required. Confirmations
+default to Yes (`[Y/n]` / `[S/n]`).
 
 ## Sweeper phase (default)
 
@@ -62,6 +68,9 @@ when the user confirms (`--cleanup` applies without prompting when used with
 
 ## Non-interactive flags
 
+- `--lang en|es` (or `SUPAGIT_LANG`) sets the UI language; required with `--yes`
+  when no TTY language menu is possible.
+- `--backend none|supabase` for `init` or auto-init when config is missing.
 - `--yes` skips confirmation prompts. With the sweeper enabled (default),
   also pass `--integrate` (or `--integrate none`) and `--pipeline`, or pass
   `--no-sweep`.

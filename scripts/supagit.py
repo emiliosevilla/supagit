@@ -22,10 +22,13 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+import supagit_i18n
 import supagit_inventory
 import supagit_layout
 import supagit_menu
 import supagit_sweep
+import supagit_update
+from supagit_i18n import t
 from supagit_inventory import RepoInventory
 from supagit_menu import MenuSelection
 
@@ -53,6 +56,8 @@ class Options:
     integrate: str | None = None
     pipeline_order: str | None = None
     cleanup: bool | None = None
+    lang: str | None = None
+    backend: str | None = None
 
 
 @dataclass(frozen=True)
@@ -219,10 +224,7 @@ class Pipeline:
         elif not path.is_absolute():
             path = (Path.cwd() / path).resolve()
         if not path.is_file():
-            raise ShipError(
-                f"Missing configuration file {path}. "
-                "Create .supagit.json with a backend configuration."
-            )
+            self._auto_create_config(path)
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -230,6 +232,44 @@ class Pipeline:
         self._validate_config(config, path)
         self.config_path = path
         return config
+
+    def _auto_create_config(self, path: Path) -> None:
+        print(t("missing_config_creating", path=path))
+        backend = self.options.backend
+        if backend is None:
+            if self.options.yes or not sys.stdin.isatty():
+                raise ShipError(t("missing_config_need_backend", path=path))
+            backend = (self.prompt(t("backend_prompt")) or "none").lower()
+        if backend not in {"none", "supabase"}:
+            raise ShipError(t("backend_invalid"))
+        branch_names = None
+        if self.options.pipeline_order:
+            branch_names = [
+                part.strip()
+                for part in self.options.pipeline_order.split(",")
+                if part.strip()
+            ]
+        config = init_project_config(
+            backend,
+            "SUPABASE_PRE_PROJECT_REF",
+            "SUPABASE_PROD_PROJECT_REF",
+            branch_names,
+        )
+        rendered = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
+        try:
+            with path.open("x", encoding="utf-8") as stream:
+                stream.write(rendered)
+        except FileExistsError as exc:
+            raise ShipError(
+                f"Configuration appeared at {path}; refusing to overwrite it."
+            ) from exc
+        print(
+            colour_text(
+                t("created_config", path=path),
+                GREEN,
+                colour_enabled(self.options.color, sys.stdout),
+            )
+        )
 
     @staticmethod
     def _validate_config(config: dict, path: Path) -> None:
@@ -543,7 +583,7 @@ class Pipeline:
     def warning(self, message: str) -> None:
         print(
             colour_text(
-                f"WARNING: {message}",
+                t("warning", detail=message),
                 self.RED,
                 colour_enabled(self.options.color, sys.stderr),
             ),
@@ -607,12 +647,14 @@ class Pipeline:
     def confirm(self, message: str) -> None:
         if self.options.dry_run or self.options.yes:
             return
-        prompt = f"{message} [y/N] "
+        prompt = f"{message}{t('confirm_suffix')}"
         if self._colour_enabled():
             prompt = f"{self.GREEN}{prompt}{self.RESET}"
         answer = input(prompt).strip().lower()
-        if answer not in {"y", "yes"}:
-            raise UserAborted("Operation cancelled by the user.")
+        # Empty Enter defaults to yes (y/yes and Spanish s/si/sí).
+        if answer in {"", "y", "yes", "s", "si", "sí"}:
+            return
+        raise UserAborted(t("user_aborted"))
 
     def prompt(self, message: str) -> str:
         if self._colour_enabled():
@@ -693,12 +735,10 @@ class Pipeline:
         if self.options.dry_run:
             return "<commit-message-required>"
         if self.options.yes:
-            raise ShipError(
-                f"With --yes, provide --message/-m for the initial {self.dev} commit."
-            )
-        message = self.prompt(f"Commit message for {self.dev}: ")
+            raise ShipError(t("commit_message_yes", branch=self.dev))
+        message = self.prompt(t("commit_message_prompt", branch=self.dev))
         if not message:
-            raise ShipError("The commit message cannot be empty.")
+            raise ShipError(t("commit_message_empty"))
         return message
 
     def _assert_dev_checkout(self) -> None:
@@ -734,7 +774,7 @@ class Pipeline:
 
         if status.strip():
             message = self._commit_message()
-            self.confirm(f"Commit all current changes on {self.dev} and publish them to {self.remote}?")
+            self.confirm(t("confirm_commit_publish", branch=self.dev, remote=self.remote))
             self.git("add", "-A", mutating=True)
             staged = self.git("diff", "--cached", "--name-only", capture=True)
             self._reject_sensitive_paths(staged.splitlines())
@@ -753,7 +793,7 @@ class Pipeline:
                 self._assert_dev_synced()
                 return
             print(f"Local {self.dev} contains unpublished commits ({relation.strip()}).")
-            self.confirm(f"Publish the existing commits from {self.dev} to {self.remote}?")
+            self.confirm(t("confirm_publish_existing", branch=self.dev, remote=self.remote))
 
         self.git("push", self.remote, self.dev, mutating=True)
         self._assert_dev_synced()
@@ -800,7 +840,7 @@ class Pipeline:
                 mutating=True,
             )
             if not self.options.dry_run and "Remote database is up to date" not in dry_output:
-                self.confirm(f"Apply pending migrations to {label} ({project_ref})?")
+                self.confirm(t("confirm_migrate", label=label, ref=project_ref))
             self.run_raw(
                 [self.cli, "db", "push", "--linked", "--yes", "--include-all"],
                 mutating=True,
@@ -821,7 +861,7 @@ class Pipeline:
     def promote(self, source: str, target: str) -> None:
         print(f"\n=== CODE {source} → {target} ===")
         self.fetch_branch(target)
-        self.confirm(f"Merge {source} into {target} and publish {target}?")
+        self.confirm(t("confirm_promote", source=source, target=target))
         self.git("checkout", target, mutating=True)
         try:
             self.git("merge", source, "--no-edit", mutating=True)
@@ -861,10 +901,7 @@ class Pipeline:
     def _require_noninteractive_selection(self) -> None:
         if self.options.yes and not self.options.no_sweep:
             if self.options.integrate is None or self.options.pipeline_order is None:
-                raise ShipError(
-                    "With --yes, provide --integrate (or --integrate none) and --pipeline, "
-                    "or pass --no-sweep."
-                )
+                raise ShipError(t("yes_need_flags"))
 
     def _sweep_git(self, *args: str, cwd: Path | None = None, capture: bool = True) -> str:
         return self.git(
@@ -894,12 +931,11 @@ class Pipeline:
                 selection = supagit_menu.selection_from_flags(inventory, pipeline, integrate)
             else:
                 print(supagit_menu.render_branch_menu(inventory))
+                default_chain = " → ".join(self.branches)
                 pipeline_line = self.prompt(
-                    "Pipeline order (numbers/names, empty = default dev→pre→prod): "
+                    t("pipeline_order_prompt", default=default_chain)
                 )
-                integrate_line = self.prompt(
-                    "Integrate features (numbers/names, empty = default, 'none' = skip): "
-                )
+                integrate_line = self.prompt(t("integrate_prompt"))
                 selection = supagit_menu.parse_menu_responses(
                     inventory,
                     pipeline_line,
@@ -914,7 +950,7 @@ class Pipeline:
             f"Pipeline: {' → '.join(selection.pipeline)}\n"
             f"Integrate: {integrate_text}"
         )
-        self.confirm(f"Proceed with this plan?\n{plan}")
+        self.confirm(f"{t('confirm_plan')}\n{plan}")
         return selection
 
     def apply_menu_selection(self, selection: MenuSelection) -> None:
@@ -982,13 +1018,13 @@ class Pipeline:
             inventory, selection.pipeline, selection.integrate
         )
         if not plan.items:
-            print("Cleanup: nothing safe to remove.")
+            print(t("cleanup_nothing"))
             return
-        print("Cleanup candidates:")
+        print(t("cleanup_candidates"))
         for item in plan.items:
             print(f"  - {item.kind}: {item.name} {item.path or ''}")
         if self.options.cleanup is None:
-            self.confirm("Apply optional cleanup of merged features/worktrees?")
+            self.confirm(t("confirm_cleanup"))
         elif self.options.yes and self.options.cleanup is True:
             pass
         supagit_sweep.apply_cleanup(self._sweep_git, plan, dry_run=self.options.dry_run)
@@ -1012,7 +1048,7 @@ class Pipeline:
         self._assert_dev_synced()
         self.run_checks()
         self.validate_clean_after_checks()
-        self.confirm(f"Start the complete {' → '.join(self.branches)} pipeline?")
+        self.confirm(t("confirm_pipeline", chain=" → ".join(self.branches)))
 
         if self.backend.provider == "none":
             print("\n=== BACKEND NONE: database migration skipped ===")
@@ -1028,7 +1064,7 @@ class Pipeline:
         if not self.options.dry_run:
             self.validate_workspace()
         self.status(
-            f"\nPipeline completed: {' → '.join(self.branches)}. Final checkout: {self.dev}.",
+            t("pipeline_completed", chain=" → ".join(self.branches), branch=self.dev),
             self.GREEN,
         )
 
@@ -1043,12 +1079,13 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, Options]:
     parser.add_argument("--dry-run", action="store_true", help="Show the plan without modifying Git or Supabase.")
     parser.add_argument("--yes", action="store_true", help="Skip confirmations; use only with explicit authorization.")
     parser.add_argument("-m", "--message", help="Initial commit message for the first pipeline branch; required with --yes when changes exist.")
-    parser.add_argument("--backend", choices=("none", "supabase"), help="Backend for `supagit init`.")
+    parser.add_argument("--backend", choices=("none", "supabase"), help="Backend for `supagit init` or auto-init when `.supagit.json` is missing.")
     parser.add_argument("--branches", help="Comma-separated ordered branches for `supagit init`.")
     parser.add_argument("--pre-ref-env", help="Environment variable name for the Supabase pre project ref.")
     parser.add_argument("--prod-ref-env", help="Environment variable name for the Supabase prod project ref.")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto", help="Confirmation color: auto, always, or never.")
     parser.add_argument("--no-color", action="store_true", help="Use --color never.")
+    parser.add_argument("--lang", choices=("en", "es"), help="UI language: en or es.")
     parser.add_argument("--no-sweep", action="store_true")
     parser.add_argument("--integrate", help="Comma-separated feature branches, or 'none'")
     parser.add_argument("--pipeline", dest="pipeline_order", help="Comma-separated ordered pipeline branches")
@@ -1072,29 +1109,78 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, Options]:
         integrate=args.integrate,
         pipeline_order=args.pipeline_order,
         cleanup=cleanup,
+        lang=args.lang,
+        backend=args.backend,
     )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     options: Options | None = None
     try:
-        args, options = parse_args(argv or sys.argv[1:])
+        raw_argv = list(argv if argv is not None else sys.argv[1:])
+        # Self-update before language so a stale install refreshes first.
+        print("[supagit] Checking for updates… / Comprobando actualizaciones…")
+        try:
+            if not needs_skip_update():
+                source = supagit_update.source_root_from_marker()
+                if source is None:
+                    candidate = _SCRIPT_DIR.parent
+                    if (candidate / "scripts" / "install-supagit-global.sh").is_file():
+                        source = candidate
+                if source is None:
+                    raise ShipError(
+                        "Cannot locate the registered supagit source-root clone. "
+                        "Re-run scripts/install-supagit-global.sh from a clone of "
+                        "https://github.com/emiliosevilla/supagit.git"
+                    )
+                if supagit_update.needs_update(source):
+                    print("[supagit] Update available; pulling and reinstalling… / Hay actualización…")
+                    supagit_update.pull_and_reinstall(source)
+                    print("[supagit] Update installed; restarting… / Actualización instalada; reiniciando…")
+                    env = os.environ.copy()
+                    env[supagit_update.SKIP_ENV] = "1"
+                    script = Path(__file__).resolve()
+                    os.execve(sys.executable, [sys.executable, str(script), *raw_argv], env)
+                else:
+                    print("[supagit] Already on the latest supagit (origin/main).")
+        except ShipError:
+            raise
+        except supagit_update.UpdateError as exc:
+            raise ShipError(
+                f"Could not update supagit from GitHub / No se pudo actualizar: {exc}"
+            ) from exc
+
+        args, options = parse_args(raw_argv)
+        try:
+            supagit_i18n.ensure_language(options.lang, yes=options.yes)
+        except RuntimeError as exc:
+            key = str(exc)
+            if key == "lang_required_yes":
+                raise ShipError(t("lang_required_yes")) from exc
+            raise ShipError(t("lang_invalid", value=key)) from exc
+        except ValueError as exc:
+            raise ShipError(t("lang_invalid", value=str(exc))) from exc
+
         if args.command == "init":
             return initialise_project(args, options)
         Pipeline(options).run()
         return 0
     except UserAborted as exc:
         enabled = colour_enabled(options.color, sys.stderr) if options else sys.stderr.isatty()
-        print(colour_text(f"ABORTED: {exc}", RED, enabled), file=sys.stderr)
+        print(colour_text(t("aborted", detail=str(exc)), RED, enabled), file=sys.stderr)
         return 2
     except ShipError as exc:
         enabled = colour_enabled(options.color, sys.stderr) if options else sys.stderr.isatty()
-        print(colour_text(f"ERROR: {exc}", RED, enabled), file=sys.stderr)
+        print(colour_text(t("error", detail=str(exc)), RED, enabled), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         enabled = colour_enabled(options.color, sys.stderr) if options else sys.stderr.isatty()
-        print(colour_text("ABORTED: user interruption.", RED, enabled), file=sys.stderr)
+        print(colour_text(t("aborted_interrupt"), RED, enabled), file=sys.stderr)
         return 130
+
+
+def needs_skip_update() -> bool:
+    return os.environ.get(supagit_update.SKIP_ENV) == "1"
 
 
 if __name__ == "__main__":

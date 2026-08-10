@@ -22,6 +22,9 @@ SPEC.loader.exec_module(MODULE)
 
 
 class BranchDiscoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        MODULE.supagit_i18n.set_lang("en")
+        os.environ[MODULE.supagit_update.SKIP_ENV] = "1"
     def test_exact_alias_beats_prefixed_branch(self) -> None:
         ranked = MODULE.Pipeline.rank_branch_candidates("dev", ["dev", "feature/dev"])
         self.assertEqual(ranked[0], (100, "dev"))
@@ -94,6 +97,21 @@ class BranchDiscoveryTests(unittest.TestCase):
         prompt = mocked_input.call_args.args[0]
         self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
         self.assertTrue(prompt.endswith(MODULE.Pipeline.RESET))
+        self.assertIn("[Y/n]", prompt)
+
+    def test_confirmation_empty_enter_defaults_to_yes(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
+        with patch("builtins.input", return_value="") as mocked_input:
+            pipeline.confirm("Continue with the pipeline?")
+        self.assertIn("[Y/n]", mocked_input.call_args.args[0])
+
+    def test_confirmation_n_aborts(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
+        with patch("builtins.input", return_value="n"):
+            with self.assertRaises(MODULE.UserAborted):
+                pipeline.confirm("Continue with the pipeline?")
 
     def test_warning_uses_red_when_color_is_forced(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -259,6 +277,117 @@ class PromotionTargetTests(unittest.TestCase):
         pipeline.branches = ("main",)
         pipeline.backend = MODULE.BackendConfig(provider="none", cli=None, targets={})
         self.assertIsNone(pipeline._backend_target_for_branch("main", 0))
+
+
+class I18nAndUpdateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        MODULE.supagit_i18n.set_lang("en")
+        os.environ[MODULE.supagit_update.SKIP_ENV] = "1"
+
+    def test_t_switches_language(self) -> None:
+        MODULE.supagit_i18n.set_lang("en")
+        self.assertEqual(MODULE.t("user_aborted"), "Operation cancelled by the user.")
+        MODULE.supagit_i18n.set_lang("es")
+        self.assertEqual(MODULE.t("user_aborted"), "Operación cancelada por el usuario.")
+
+    def test_resolve_lang_from_arg_and_env(self) -> None:
+        self.assertEqual(
+            MODULE.supagit_i18n.resolve_lang_from_env_and_args("es", yes=True, stdin_isatty=False),
+            "es",
+        )
+        with patch.dict(os.environ, {"SUPAGIT_LANG": "en"}, clear=False):
+            self.assertEqual(
+                MODULE.supagit_i18n.resolve_lang_from_env_and_args(None, yes=True, stdin_isatty=False),
+                "en",
+            )
+
+    def test_yes_without_lang_raises(self) -> None:
+        with patch.dict(os.environ, {"SUPAGIT_LANG": ""}, clear=False):
+            with patch.object(MODULE.supagit_i18n.sys.stdin, "isatty", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "lang_required_yes"):
+                    MODULE.supagit_i18n.ensure_language(None, yes=True)
+
+    def test_confirm_spanish_suffix_and_si(self) -> None:
+        MODULE.supagit_i18n.set_lang("es")
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
+        with patch("builtins.input", return_value="sí") as mocked_input:
+            pipeline.confirm("¿Continuar?")
+        self.assertIn("[S/n]", mocked_input.call_args.args[0])
+
+    def test_auto_create_config_writes_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".supagit.json"
+            pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+            pipeline.options = MODULE.Options(
+                dry_run=False,
+                yes=True,
+                config_path=path,
+                message=None,
+                color="never",
+                backend="none",
+            )
+            pipeline.root = Path(tmp)
+            with patch("builtins.print"):
+                pipeline._auto_create_config(path)
+            self.assertTrue(path.is_file())
+            data = path.read_text(encoding="utf-8")
+            self.assertIn('"provider": "none"', data)
+
+    def test_auto_create_config_refuses_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".supagit.json"
+            path.write_text("{}\n", encoding="utf-8")
+            pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+            pipeline.options = MODULE.Options(
+                dry_run=False,
+                yes=True,
+                config_path=path,
+                message=None,
+                color="never",
+                backend="none",
+            )
+            with patch("builtins.print"):
+                with self.assertRaisesRegex(MODULE.ShipError, "refusing to overwrite"):
+                    pipeline._auto_create_config(path)
+
+    def test_needs_update_true_when_behind(self) -> None:
+        update = MODULE.supagit_update
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "2\t0"
+            raise AssertionError(cmd)
+
+        with patch.object(update, "_run", side_effect=fake_run):
+            self.assertTrue(update.needs_update(Path("/tmp")))
+
+    def test_needs_update_false_when_current(self) -> None:
+        update = MODULE.supagit_update
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "0\t0"
+            raise AssertionError(cmd)
+
+        with patch.object(update, "_run", side_effect=fake_run):
+            self.assertFalse(update.needs_update(Path("/tmp")))
+
+    def test_needs_skip_update_env(self) -> None:
+        with patch.dict(os.environ, {MODULE.supagit_update.SKIP_ENV: "1"}):
+            self.assertTrue(MODULE.needs_skip_update())
+        with patch.dict(os.environ, {MODULE.supagit_update.SKIP_ENV: "0"}):
+            self.assertFalse(MODULE.needs_skip_update())
 
 
 if __name__ == "__main__":
