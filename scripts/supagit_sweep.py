@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
+import re
 
 from supagit_inventory import RepoInventory
 
@@ -12,6 +13,15 @@ RejectSensitive = Callable[[Sequence[str]], None]
 
 PR_BODY = "Integrated by supagit sweeper."
 PROMOTE_PR_BODY = "Promoted by supagit."
+_PR_URL_NUMBER = re.compile(r"/pull/(\d+)\b")
+
+
+def pr_number_from_create_output(output: str) -> int | None:
+    """Parse the PR number from `gh pr create` stdout (PR URL)."""
+    match = _PR_URL_NUMBER.search(output or "")
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 class SweepError(RuntimeError):
@@ -308,6 +318,7 @@ class GhClient:
     def create_pr(self, head: str, base: str, title: str) -> int:
         if self._dry_run:
             return 0
+        # `gh pr create` prints the PR URL; it does not support --json/--jq.
         output = self._run_raw(
             [
                 "gh",
@@ -321,15 +332,14 @@ class GhClient:
                 title,
                 "--body",
                 PR_BODY,
-                "--json",
-                "number",
-                "--jq",
-                ".number",
             ]
         ).strip()
-        if not output:
+        number = pr_number_from_create_output(output)
+        if number is None:
+            number = self.find_open_pr(head, base)
+        if number is None:
             raise SweepError(f"Could not create pull request for {head} into {base}.")
-        return int(output)
+        return number
 
     def merge_pr(self, number: int, *, delete_branch: bool = True) -> None:
         if self._dry_run:
@@ -342,6 +352,7 @@ class GhClient:
     def create_promote_pr(self, head: str, base: str, title: str) -> int:
         if self._dry_run:
             return 0
+        # Same as create_pr: stdout is the PR URL, not JSON.
         output = self._run_raw(
             [
                 "gh",
@@ -355,15 +366,14 @@ class GhClient:
                 title,
                 "--body",
                 PROMOTE_PR_BODY,
-                "--json",
-                "number",
-                "--jq",
-                ".number",
             ]
         ).strip()
-        if not output:
+        number = pr_number_from_create_output(output)
+        if number is None:
+            number = self.find_open_pr(head, base)
+        if number is None:
             raise SweepError(f"Could not create pull request for {head} into {base}.")
-        return int(output)
+        return number
 
 
 def commit_dirty_tree(
