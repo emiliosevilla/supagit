@@ -9,14 +9,12 @@ the agent-specific skill operating instructions are in
 
 ## Installation
 
-You need a **local clone** of this repository once. After that, run `supagit`
-from any of your projects. Forking is only for proposing changes; it is not
-required (and not recommended) for installation — install from
-`emiliosevilla/supagit` so auto-updates keep working.
+Preferred: the one-liner. It clones (or updates) the canonical source into
+`~/.local/share/supagit` and runs the global installer. Forking is only for
+proposing changes — install from `emiliosevilla/supagit` so auto-updates keep
+working.
 
-### Option A — one-liner (`curl`)
-
-After the repository is public on GitHub:
+### Option A — one-liner (`curl`) — recommended
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
@@ -28,9 +26,10 @@ Spanish UI during install:
 curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh -s -- --lang es
 ```
 
-That script clones (or fast-forward updates) the source into
-`~/.local/share/supagit`, then runs the global installer. Optional overrides:
-`SUPAGIT_REPO_URL`, `SUPAGIT_SOURCE_DIR`, `SUPAGIT_BRANCH`.
+Optional overrides: `SUPAGIT_REPO_URL`, `SUPAGIT_SOURCE_DIR`, `SUPAGIT_BRANCH`.
+
+After install, run `supagit` from any of your projects (ensure `~/.local/bin`
+is on your `PATH`).
 
 ### Option B — clone, then install
 
@@ -40,8 +39,8 @@ cd supagit
 ./scripts/install-supagit-global.sh --lang es
 ```
 
-If you already develop inside a clone of this repo, you can install from that
-checkout the same way (`./scripts/install-supagit-global.sh`).
+If you already develop inside a clone of this repo, install from that checkout
+the same way (`./scripts/install-supagit-global.sh`).
 
 On a TTY the installer asks for language (`(1) English` / `(2) Español`).
 Skip the menu with `--lang en|es` or `SUPAGIT_LANG`. Non-TTY defaults to English.
