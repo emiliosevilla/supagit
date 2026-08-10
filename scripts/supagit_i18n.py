@@ -35,7 +35,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Pipeline order (numbers/names, Enter = {default}): "
         ),
         "integrate_prompt": (
-            "Independent work to merge (names, Enter = all checked, none = skip): "
+            "Independent work to merge (numbers or names; Enter = all [✓] still needed; "
+            "0/none = skip): "
         ),
         "confirm_plan": "Run these steps?",
         "explain_backend": (
@@ -89,11 +90,14 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "explain_integrate": (
             "Optional: merge independent work into the first pipeline branch before publishing.\n"
-            "Checked items [✓] are selected if you press Enter. Type none to skip."
+            "Each work branch is numbered. [✓] means selected by default for Enter.\n"
+            "Branches already included in the first pipeline branch stay [✓] with a note, "
+            "but Enter skips opening a new pull request for them.\n"
+            "Type numbers (for example 1,3), names, or 0/none to skip all."
         ),
         "explain_pipeline_order": (
             "Choose which main branches to include and their order. "
-            "Numbers refer to the pipeline list above."
+            "Numbers refer to the main-branches list above (not the work list)."
         ),
         "explain_plan": "Review the plan above.",
         "menu_section_worktrees": "── Independent worktrees ──",
@@ -101,7 +105,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "menu_section_pipeline": "── Main local and remote repository branches ──",
         "menu_check_on": "[✓]",
         "menu_check_off": "[ ]",
-        "menu_note_contained": "already included in {base}",
+        "menu_note_contained": "already included in {base} (no new PR on Enter)",
         "menu_note_dirty": "(uncommitted changes)",
         "menu_note_worktree": "worktree: {path}",
         "plan_header": "This is what I will do:",
@@ -111,9 +115,13 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_promote_item": "Merge {source} into {target} and publish {target}",
         "plan_none_integrate": "No independent work branches to integrate.",
         "error_contained_integrate": (
-            "Branch {branch} is already included in {base}; omit it or press Enter for defaults."
+            "Branch {branch} is already included in {base}; it needs no new pull request. "
+            "Omit it, press Enter for defaults, or type 0/none to skip all work branches."
         ),
-        "confirm_commit_publish": (
+        "error_integrate_number": (
+            "Invalid independent-work number: {token}. Use the numbers shown next to "
+            "worktrees / other local work."
+        ),        "confirm_commit_publish": (
             "Commit all current changes on {branch} and publish them to {remote}?"
         ),
         "confirm_publish_existing": (
@@ -278,7 +286,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Orden del pipeline (números/nombres, Enter = {default}): "
         ),
         "integrate_prompt": (
-            "Trabajo independiente a fusionar (nombres, Enter = todos marcados, ninguno = omitir): "
+            "Trabajo independiente a fusionar (números o nombres; Enter = todos los [✓] "
+            "que aún hacen falta; 0/ninguno = omitir): "
         ),
         "confirm_plan": "¿Ejecuto estos pasos?",
         "explain_backend": (
@@ -331,11 +340,14 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "explain_integrate": (
             "Opcional: fusionar trabajo independiente en la primera rama del pipeline antes de publicar.\n"
-            "Los elementos marcados [✓] se seleccionan si pulsas Enter. Escribe ninguno para omitir."
+            "Cada rama de trabajo tiene un número. [✓] = seleccionada por defecto con Enter.\n"
+            "Las ya incluidas en la primera rama del pipeline siguen con [✓] y una nota, "
+            "pero Enter no abre una pull request nueva para ellas.\n"
+            "Escribe números (por ejemplo 1,3), nombres, o 0/ninguno para omitir todo."
         ),
         "explain_pipeline_order": (
             "Elige qué ramas principales incluir y su orden. "
-            "Los números se refieren a la lista del pipeline arriba."
+            "Los números se refieren a la lista de ramas principales (no a la de trabajo)."
         ),
         "explain_plan": "Revisa el plan anterior.",
         "menu_section_worktrees": "── Worktrees independientes ──",
@@ -343,7 +355,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "menu_section_pipeline": "── Ramas principales del repositorio local y remoto ──",
         "menu_check_on": "[✓]",
         "menu_check_off": "[ ]",
-        "menu_note_contained": "ya incluida en {base}",
+        "menu_note_contained": "ya incluida en {base} (Enter no abre PR nueva)",
         "menu_note_dirty": "(cambios sin commit)",
         "menu_note_worktree": "worktree: {path}",
         "plan_header": "Esto es lo que voy a hacer:",
@@ -353,7 +365,13 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_promote_item": "Fusionar {source} en {target} y publicar {target}",
         "plan_none_integrate": "No hay ramas de trabajo independientes que integrar.",
         "error_contained_integrate": (
-            "La rama {branch} ya está incluida en {base}; omítela o pulsa Enter para los valores por defecto."
+            "La rama {branch} ya está incluida en {base}; no necesita una pull request nueva. "
+            "Omítela, pulsa Enter para los valores por defecto, o escribe 0/ninguno para "
+            "omitir todo el trabajo independiente."
+        ),
+        "error_integrate_number": (
+            "Número de trabajo independiente no válido: {token}. Usa los números junto a "
+            "los worktrees / otro trabajo local."
         ),
         "confirm_commit_publish": (
             "¿Hacer commit de todos los cambios en {branch} y publicarlos en {remote}?"

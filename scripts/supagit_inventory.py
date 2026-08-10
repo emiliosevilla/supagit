@@ -208,8 +208,27 @@ def build_inventory(
 
 
 def default_integrate_names(inventory: RepoInventory) -> tuple[str, ...]:
+    """Enter default: non-pipeline branches that still need a merge into first.
+
+    Contained branches stay checked in the menu for visibility, but are omitted
+    here so Enter does not open empty pull requests.
+    """
     return tuple(
         b.name
         for b in inventory.branches
         if not b.is_pipeline and not b.contained_in_first
     )
+
+
+def independent_work_branches(inventory: RepoInventory) -> tuple[BranchInfo, ...]:
+    """Independent work in menu order: linked worktrees first, then other locals."""
+    worktrees: list[BranchInfo] = []
+    other_work: list[BranchInfo] = []
+    for branch in inventory.branches:
+        if branch.is_pipeline:
+            continue
+        if branch.has_worktree:
+            worktrees.append(branch)
+        else:
+            other_work.append(branch)
+    return tuple(worktrees + other_work)

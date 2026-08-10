@@ -57,13 +57,12 @@ skips). User answers are **green** prompts.
 The menu has two labeled blocks:
 
 - **Independent work** — linked worktrees and other local feature branches.
-  Checkmarks `[✓]` / `[ ]` (order irrelevant). Enter integrates all checked
-  branches; `none` / `ninguno` skips integration. Branches already contained in
-  the first pipeline branch appear unchecked with a note and are excluded from
-  the Enter default.
-- **Main pipeline branches** — promotion order for this run. Numbers `1.`, `2.`,
-  … (order matters). Enter keeps the configured default; comma-separated
-  numbers or names reorder the pipeline.
+  Numbers `1.`, `2.`, … with `[✓]` defaults. Enter integrates `[✓]` branches
+  that still need a PR; `0` / `none` skips; otherwise type numbers or names.
+  Already-contained branches stay `[✓]` with a note but are skipped on Enter.
+- **Main pipeline branches** — promotion order for this run. Separate numbers
+  `1.`, `2.`, … (order matters). Enter keeps the configured default;
+  comma-separated numbers or names reorder the pipeline.
 
 Two green prompts follow the menu: integrate first, then pipeline order. After
 both, a numbered cyan execution plan is printed, then a green confirmation

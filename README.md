@@ -178,13 +178,15 @@ every cyan block, `supagit` asks a green **Continue?** / **¿Continuar?**
 The menu has two labeled blocks:
 
 - **Independent work** — linked worktrees and other local feature branches.
-  Shown with checkmarks `[✓]` / `[ ]` (order does not matter). Press Enter to
-  integrate all checked branches; type `none` to skip integration. Branches
-  already contained in the first pipeline branch are shown unchecked with a
-  note and are not included in the Enter default.
-- **Main pipeline branches** — promotion order for this run. Shown with numbers
-  `1.`, `2.`, … (order matters). Press Enter for the configured default order,
-  or enter comma-separated numbers or branch names to reorder.
+  Numbered `1.`, `2.`, … with checkmarks `[✓]`. Press Enter to integrate every
+  `[✓]` branch that is **not** already contained in the first pipeline branch;
+  type numbers (e.g. `1,3`), names, or `0` / `none` to skip. Branches already
+  contained stay `[✓]` with a note (“already included…”) so you see them, but
+  Enter does not open a new pull request for them.
+- **Main pipeline branches** — promotion order for this run. Shown with their
+  own numbers `1.`, `2.`, … (order matters; these numbers apply only to the
+  pipeline prompt). Press Enter for the configured default order, or enter
+  comma-separated numbers or branch names to reorder.
 
 After both prompts, a numbered **execution plan** is printed in cyan, followed
 by a green confirmation (`[Y/n]` / `[S/n]`; Enter = yes).

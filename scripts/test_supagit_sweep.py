@@ -320,13 +320,26 @@ class MenuTests(unittest.TestCase):
 
     def test_integrate_rejects_digit_token(self) -> None:
         inv = _fake_inventory()
-        with self.assertRaises(supagit_menu.MenuError):
-            supagit_menu.parse_integrate_line(inv, "4")
+        with self.assertRaises(supagit_menu.MenuError) as ctx:
+            supagit_menu.parse_integrate_line(inv, "99")
+        self.assertIn("99", str(ctx.exception))
+
+    def test_integrate_accepts_work_number(self) -> None:
+        inv = _fake_inventory()
+        # work order: feature/x (worktree), then old (other)
+        self.assertEqual(supagit_menu.parse_integrate_line(inv, "1"), ("feature/x",))
+
+    def test_integrate_zero_skips(self) -> None:
+        inv = _fake_inventory()
+        self.assertEqual(supagit_menu.parse_integrate_line(inv, "0"), ())
 
     def test_integrate_rejects_contained_explicit(self) -> None:
         inv = _fake_inventory()
         with self.assertRaises(supagit_menu.MenuError):
             supagit_menu.parse_integrate_line(inv, "old")
+        with self.assertRaises(supagit_menu.MenuError):
+            # "old" is work item 2 when feature/x is 1
+            supagit_menu.parse_integrate_line(inv, "2")
 
     def test_integrate_ninguno(self) -> None:
         inv = _fake_inventory()
@@ -356,7 +369,10 @@ class MenuTests(unittest.TestCase):
         text = supagit_menu.render_sweeper_menu(inv)
         self.assertIn("[✓]", text)
         self.assertIn("feature/x", text)
-        self.assertIn("[ ]", text)  # contained "old"
+        self.assertRegex(text, r"(?m)^1\. \[✓\] feature/x")
+        self.assertRegex(text, r"(?m)^2\. \[✓\] old")  # contained still checked
+        self.assertIn("already included", text)
+        self.assertNotIn("[ ]", text)
         self.assertIn("old", text)
         self.assertRegex(text, r"(?m)^1\. dev")
         self.assertRegex(text, r"(?m)^2\. pre")

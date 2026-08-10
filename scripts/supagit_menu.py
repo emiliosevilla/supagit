@@ -4,7 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from supagit_inventory import BranchInfo, RepoInventory, default_integrate_names
+from supagit_inventory import (
+    BranchInfo,
+    RepoInventory,
+    default_integrate_names,
+    independent_work_branches,
+)
 from supagit_i18n import t
 
 
@@ -32,27 +37,33 @@ def parse_integrate_line(inventory: RepoInventory, line: str) -> tuple[str, ...]
         return default_integrate_names(inventory)
 
     lowered = stripped.lower()
-    if lowered in {"none", "ninguno", "integrate: none"}:
+    if lowered in {"none", "ninguno", "0", "integrate: none"}:
         return ()
 
     by_name = _branch_by_name(inventory)
+    work_list = independent_work_branches(inventory)
     base = inventory.first_branch
     seen: set[str] = set()
     names: list[str] = []
     for token in _parse_tokens(stripped):
         if token.isdigit():
-            raise MenuError("Menu numbers are only for pipeline order, not integrate branches")
-        if token not in by_name:
-            raise MenuError(t("error_unknown_branch", branch=token))
-        branch = by_name[token]
+            index = int(token) - 1
+            if index < 0 or index >= len(work_list):
+                raise MenuError(t("error_integrate_number", token=token))
+            name = work_list[index].name
+        else:
+            if token not in by_name:
+                raise MenuError(t("error_unknown_branch", branch=token))
+            name = token
+        branch = by_name[name]
         if branch.is_pipeline:
-            raise MenuError(t("error_integrate_in_pipeline", branch=token))
+            raise MenuError(t("error_integrate_in_pipeline", branch=name))
         if branch.contained_in_first:
-            raise MenuError(t("error_contained_integrate", branch=token, base=base))
-        if token in seen:
+            raise MenuError(t("error_contained_integrate", branch=name, base=base))
+        if name in seen:
             continue
-        seen.add(token)
-        names.append(token)
+        seen.add(name)
+        names.append(name)
     return tuple(names)
 
 
@@ -158,8 +169,8 @@ def classify_menu_branches(
 
 
 def _work_branch_check(branch: BranchInfo) -> str:
-    if branch.contained_in_first:
-        return t("menu_check_off")
+    # Contained work is shown checked (already in the base); Enter still skips
+    # opening a new PR for those names via default_integrate_names().
     return t("menu_check_on")
 
 
@@ -174,11 +185,11 @@ def _work_branch_notes(branch: BranchInfo, base: str) -> list[str]:
     return notes
 
 
-def _format_work_branch_line(branch: BranchInfo, base: str) -> str:
+def _format_work_branch_line(index: int, branch: BranchInfo, base: str) -> str:
     check = _work_branch_check(branch)
     notes = _work_branch_notes(branch, base)
     suffix = f"  {'  '.join(notes)}" if notes else ""
-    return f"{check} {branch.name}{suffix}"
+    return f"{index}. {check} {branch.name}{suffix}"
 
 
 def _pipeline_sync_note(branch: BranchInfo) -> str:
@@ -203,6 +214,7 @@ def render_sweeper_menu(
     worktrees, other_work, pipeline = classify_menu_branches(inventory)
     base = inventory.first_branch
     lines: list[str] = []
+    work_index = 1
 
     if current_branch is not None:
         lines.append(t("menu_current_branch", branch=current_branch))
@@ -211,14 +223,16 @@ def render_sweeper_menu(
     if worktrees:
         lines.append(t("menu_section_worktrees"))
         for branch in worktrees:
-            lines.append(_format_work_branch_line(branch, base))
+            lines.append(_format_work_branch_line(work_index, branch, base))
+            work_index += 1
 
     if other_work:
         if lines:
             lines.append("")
         lines.append(t("menu_section_other_work"))
         for branch in other_work:
-            lines.append(_format_work_branch_line(branch, base))
+            lines.append(_format_work_branch_line(work_index, branch, base))
+            work_index += 1
 
     if pipeline:
         if lines:
