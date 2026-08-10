@@ -40,12 +40,24 @@ default to Yes (`[Y/n]` / `[S/n]`).
 ## Sweeper phase (default)
 
 Unless `--no-sweep` is passed, `supagit` shows an interactive branch menu
-(run-scoped; choices are not persisted into `.supagit.json`):
+(run-scoped; choices are not persisted into `.supagit.json`). The menu and
+execution plan are **cyan** (tutor context); user answers are **green**
+prompts.
 
-1. **Pipeline order** — ordered promotion branches for this run (default: config
-   branches, e.g. dev → pre → prod).
-2. **Integrate** — local feature branches to merge into the first pipeline
-   branch before promotion (default: non-contained locals; `none` skips).
+The menu has two labeled blocks:
+
+- **Independent work** — linked worktrees and other local feature branches.
+  Checkmarks `[✓]` / `[ ]` (order irrelevant). Enter integrates all checked
+  branches; `none` / `ninguno` skips integration. Branches already contained in
+  the first pipeline branch appear unchecked with a note and are excluded from
+  the Enter default.
+- **Main pipeline branches** — promotion order for this run. Numbers `1.`, `2.`,
+  … (order matters). Enter keeps the configured default; comma-separated
+  numbers or names reorder the pipeline.
+
+Two green prompts follow the menu: integrate first, then pipeline order. After
+both, a numbered cyan execution plan is printed, then a green confirmation
+(`[Y/n]` / `[S/n]`; Enter = yes).
 
 Selected features are integrated via GitHub pull requests merged into
 `pipeline[0]`; the `gh` CLI is required for that path. Dirty feature trees are
@@ -98,10 +110,13 @@ An optional `sweep` block in `.supagit.json` may document PR merge preferences
 
 ## Output and safety
 
-Confirmation prompts and commit-message prompts are green when a TTY is
-available. `NO_COLOR` and `--no-color` disable color; `--color always` forces
-it. Warnings, errors, aborts, and other negative manual-intervention messages
-are red under the same color policy.
+**Cyan** is tutor context: explanations before each interactive step, sweeper
+menu blocks, and the post-menu execution plan. **Green** is where the user
+types: confirmation prompts, commit messages, and sweeper answers. Every
+interactive `prompt` / `confirm` is preceded by a cyan explanation (skipped
+under `--yes` / non-TTY). `NO_COLOR` and `--no-color` disable color; `--color
+always` forces it. Warnings, errors, aborts, and other negative
+manual-intervention messages are red under the same color policy.
 
 The final success line is green. Final `ERROR` and `ABORTED` lines are red when
 the pipeline fails or stops partway through execution.

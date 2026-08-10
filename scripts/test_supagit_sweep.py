@@ -298,11 +298,32 @@ class MenuTests(unittest.TestCase):
         selection = supagit_menu.parse_menu_responses(
             inv,
             pipeline_line="1,3,2",
-            integrate_line="4",
+            integrate_line="feature/x",
             default_pipeline=("dev", "pre", "prod"),
         )
         self.assertEqual(selection.pipeline, ("dev", "prod", "pre"))
         self.assertEqual(selection.integrate, ("feature/x",))
+
+    def test_integrate_rejects_digit_token(self) -> None:
+        inv = _fake_inventory()
+        with self.assertRaises(supagit_menu.MenuError):
+            supagit_menu.parse_integrate_line(inv, "4")
+
+    def test_integrate_rejects_contained_explicit(self) -> None:
+        inv = _fake_inventory()
+        with self.assertRaises(supagit_menu.MenuError):
+            supagit_menu.parse_integrate_line(inv, "old")
+
+    def test_integrate_ninguno(self) -> None:
+        inv = _fake_inventory()
+        self.assertEqual(supagit_menu.parse_integrate_line(inv, "ninguno"), ())
+
+    def test_pipeline_number_scoped_to_pipeline_block(self) -> None:
+        inv = _fake_inventory()
+        self.assertEqual(
+            supagit_menu.parse_pipeline_line(inv, "1,2", ("dev", "pre", "prod")),
+            ("dev", "pre"),
+        )
 
     def test_yes_mode_flags_parser(self) -> None:
         inv = _fake_inventory()
@@ -315,6 +336,34 @@ class MenuTests(unittest.TestCase):
             inv, "", "none", default_pipeline=("dev", "pre", "prod")
         )
         self.assertEqual(selection.integrate, ())
+
+    def test_render_sweeper_menu_uses_checks_and_pipeline_numbers(self) -> None:
+        inv = _fake_inventory()
+        text = supagit_menu.render_sweeper_menu(inv)
+        self.assertIn("[✓]", text)
+        self.assertIn("feature/x", text)
+        self.assertIn("[ ]", text)  # contained "old"
+        self.assertIn("old", text)
+        self.assertRegex(text, r"(?m)^1\. dev")
+        self.assertRegex(text, r"(?m)^2\. pre")
+        self.assertRegex(text, r"(?m)^3\. prod")
+        self.assertNotIn("Pipeline order (comma-separated", text)
+        self.assertNotIn("[pipeline", text)
+
+    def test_classify_puts_worktree_before_other_work(self) -> None:
+        inv = _fake_inventory()
+        worktrees, other, pipeline = supagit_menu.classify_menu_branches(inv)
+        self.assertEqual([b.name for b in worktrees], ["feature/x"])
+        self.assertEqual([b.name for b in other], ["old"])
+        self.assertEqual([b.name for b in pipeline], ["dev", "pre", "prod"])
+
+    def test_render_execution_plan_lists_integrates(self) -> None:
+        selection = supagit_menu.MenuSelection(
+            integrate=("feature/x",), pipeline=("dev", "pre", "prod")
+        )
+        text = supagit_menu.render_execution_plan(selection)
+        self.assertIn("feature/x", text)
+        self.assertIn("dev", text)
 
 
 class GhClientTests(unittest.TestCase):

@@ -128,11 +128,22 @@ scripts/supagit
 ### Sweeper (default)
 
 Unless `--no-sweep` is passed, an interactive menu selects for **this run
-only** (not persisted):
+only** (not persisted). The menu is printed in **cyan** (tutor context); your
+answers are **green** prompts.
 
-1. **Pipeline order** — promotion branches (default: configured branches).
-2. **Integrate** — local feature branches to merge into the first pipeline
-   branch before promotion (default: eligible locals; `none` skips).
+The menu has two labeled blocks:
+
+- **Independent work** — linked worktrees and other local feature branches.
+  Shown with checkmarks `[✓]` / `[ ]` (order does not matter). Press Enter to
+  integrate all checked branches; type `none` to skip integration. Branches
+  already contained in the first pipeline branch are shown unchecked with a
+  note and are not included in the Enter default.
+- **Main pipeline branches** — promotion order for this run. Shown with numbers
+  `1.`, `2.`, … (order matters). Press Enter for the configured default order,
+  or enter comma-separated numbers or branch names to reorder.
+
+After both prompts, a numbered **execution plan** is printed in cyan, followed
+by a green confirmation (`[Y/n]` / `[S/n]`; Enter = yes).
 
 Selected features are integrated through GitHub pull requests merged into the
 first pipeline branch. The `gh` CLI must be installed and authenticated. Dirty
@@ -176,9 +187,13 @@ integration uses GitHub merge commits via `gh` and requires `gh` to be available
 
 ## Output and safety
 
-- Confirmation and commit-message prompts are green.
+- **Cyan** — tutor explanations, menu context, and execution plans.
+- **Green** — where you type: confirmation prompts, commit messages, and
+  sweeper answers.
 - Successful completion is green.
 - Warnings, errors, aborts, and negative manual-intervention messages are red.
+- Every interactive prompt is preceded by a cyan explanation of what will
+  happen if you proceed (skipped under `--yes` / non-TTY).
 - `NO_COLOR` and `--no-color` disable color; `--color always` forces it.
 - The command never uses forced Git operations and does not infer an ambiguous
   deployment target.

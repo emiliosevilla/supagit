@@ -130,6 +130,46 @@ class BranchDiscoveryTests(unittest.TestCase):
             f"{MODULE.RED}ERROR: pipeline stopped{MODULE.RESET}",
         )
 
+    def test_explain_uses_cyan_when_color_forced(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "always")
+        with patch("builtins.print") as mocked_print:
+            pipeline.explain("Tutor text")
+        mocked_print.assert_called_once_with(
+            f"{MODULE.CYAN}Tutor text{MODULE.RESET}"
+        )
+
+    def test_tutor_confirm_prints_cyan_then_green_confirm(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "always")
+        with patch("builtins.print") as mocked_print, patch("builtins.input", return_value="") as mocked_input:
+            pipeline.tutor_confirm("Will publish main.", "Continue?")
+        mocked_print.assert_called_once_with(
+            f"{MODULE.CYAN}Will publish main.{MODULE.RESET}"
+        )
+        prompt = mocked_input.call_args.args[0]
+        self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
+        self.assertIn("[Y/n]", prompt)
+        self.assertIn("Continue?", prompt)
+
+    def test_tutor_confirm_skips_under_yes(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, True, None, None, "always")
+        with patch("builtins.print") as mocked_print, patch("builtins.input") as mocked_input:
+            pipeline.tutor_confirm("Will publish main.", "Continue?")
+        mocked_print.assert_not_called()
+        mocked_input.assert_not_called()
+
+    def test_tutor_confirm_explain_under_dry_run(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(True, False, None, None, "always")
+        with patch("builtins.print") as mocked_print, patch("builtins.input") as mocked_input:
+            pipeline.tutor_confirm("Will publish main.", "Continue?")
+        mocked_print.assert_called_once_with(
+            f"{MODULE.CYAN}Will publish main.{MODULE.RESET}"
+        )
+        mocked_input.assert_not_called()
+
     def test_failed_command_colours_every_stderr_line(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         pipeline.options = MODULE.Options(False, False, None, None, "always")
@@ -283,6 +323,20 @@ class I18nAndUpdateTests(unittest.TestCase):
     def setUp(self) -> None:
         MODULE.supagit_i18n.set_lang("en")
         os.environ[MODULE.supagit_update.SKIP_ENV] = "1"
+
+    def test_tutor_i18n_keys_exist_in_en_and_es(self) -> None:
+        keys = (
+            "explain_integrate",
+            "menu_section_worktrees",
+            "menu_section_pipeline",
+            "plan_header",
+            "error_contained_integrate",
+        )
+        for lang in ("en", "es"):
+            MODULE.supagit_i18n.set_lang(lang)
+            for key in keys:
+                text = MODULE.t(key, branch="x", base="dev", default="dev → pre")
+                self.assertNotEqual(text, key, msg=f"missing {lang}:{key}")
 
     def test_t_switches_language(self) -> None:
         MODULE.supagit_i18n.set_lang("en")
