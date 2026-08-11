@@ -37,10 +37,12 @@ non-TTY). You may also run `supagit init --backend none` or
 existing configuration.
 
 At process start, `supagit` checks the registered GitHub source-root against
-`origin/main` and, if behind, pulls ff-only, reinstalls the global skill, and
-re-executes (fail-closed if that update cannot complete). The global launcher
-also refreshes stale installed files from the registered source. Set
-`SUPAGIT_SKIP_UPDATE=1` to skip the GitHub tip check once.
+`origin/main`. If **behind only**, it pulls ff-only, reinstalls the global
+skill, and re-executes. If the source clone has **diverged**, the run fails
+closed with recovery commands (no forced pull). Fail-closed if a behind-only
+update cannot complete. The global launcher also refreshes stale installed
+files from the registered source. Set `SUPAGIT_SKIP_UPDATE=1` to skip the
+GitHub tip check once.
 
 Choose UI language with the startup menu, `--lang en|es`, or `SUPAGIT_LANG`.
 With `--yes` / non-TTY, `--lang` or `SUPAGIT_LANG` is required. Confirmations
@@ -69,23 +71,31 @@ The menu has two labeled blocks:
   comma-separated numbers or names reorder the pipeline.
 
 Two green prompts follow the menu: integrate first, then pipeline order. After
-both, a numbered cyan execution plan is printed, then a green confirmation
+both, a cyan **Situation preflight** lists sync findings and proposed cures
+(publish-then-ff, feature ff, etc.). Blocked findings (diverged branch, dirty
+feature behind upstream) abort with exact `git`/`gh` commands. Then a numbered
+cyan execution plan is printed (cures included), then a green confirmation
 (`[Y/n]` / `[S/n]`; Enter = yes).
 
 Selected features are integrated via GitHub pull requests merged into
 `pipeline[0]`; the `gh` CLI is required for that path. Dirty feature trees are
-committed and pushed first; secrets in staged paths block commits.
+committed and pushed first; secrets in staged paths block commits. Clean
+features that are behind their upstream are fast-forwarded in the correct
+worktree (or by updating the ref without checking the feature out onto
+`pipeline[0]`) before `gh pr create`. Empty `base..head` ranges fail before
+create.
 
-After integration (or when integrate is empty), the main checkout is ensured on
-the first pipeline branch and that branch is fast-forward synced with its
-remote (ff-only; diverged histories fail closed).
+After plan Confirm, phases run in this order: ensure checkout on
+`pipeline[0]` → **publish** local changes on first (clean behind defers to ff)
+→ integrate features → **ff_sync** first (refused while dirty; never
+`reset --hard` on a dirty tree) → checks / migrate / promote / cleanup.
 
 ## Promotion phase
 
-The pipeline order is: publish local changes on the first branch, run checks,
-migrate each configured destination backend when present, merge each adjacent
-branch pair, and return to the first branch. With one branch there are no merge
-or promotion steps.
+After the sweeper phases above, the pipeline runs checks, migrates each
+configured destination backend when present, merges each adjacent branch pair,
+and returns to the first branch. With one branch there are no merge or
+promotion steps.
 
 Before each promotion into a destination branch, `supagit` queries GitHub branch
 rules (`gh api …/rules/branches/{branch}`, with classic protection as fallback).
@@ -105,9 +115,10 @@ when the user confirms (`--cleanup` applies without prompting when used with
 - `--yes` skips confirmation prompts. With the sweeper enabled (default),
   also pass `--integrate` (or `--integrate none`) and `--pipeline`, or pass
   `--no-sweep`.
-- `--no-sweep` skips the menu and feature integration but still relocates to
-  the main checkout when needed and fast-forward syncs the first pipeline
-  branch before promotion.
+- `--no-sweep` skips the menu and feature integration but still runs Situation
+  preflight for `pipeline[0]`, relocates to the main checkout when needed,
+  publishes when appropriate, and fast-forward syncs the first pipeline branch
+  before promotion.
 - `-m` / `--message` is required with `--yes` when the first branch has changes
   to commit.
 
@@ -146,3 +157,8 @@ the pipeline fails or stops partway through execution.
 
 Error output emitted by a failed child command is also rendered in red, line by
 line, before the final error summary.
+
+Wave-1 Situation resilience (Git + self-update) is documented in
+`docs/superpowers/specs/2026-08-11-supagit-situation-resilience-design.md`.
+Supabase recovery hardening remains deferred:
+`docs/superpowers/backlog/2026-08-11-supabase-hardening.md`.

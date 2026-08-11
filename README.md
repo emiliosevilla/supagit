@@ -57,10 +57,12 @@ command name only.
 After the first installation, running `supagit` checks the registered source
 against the global copy and updates the skill automatically when it is stale.
 At startup it also compares the source-root clone to `origin/main` on GitHub
-(`emiliosevilla/supagit`); if behind, it fast-forward pulls, reinstalls, and
-re-executes. Set `SUPAGIT_SKIP_UPDATE=1` to skip that check (tests / one-shot
-re-exec). If the source repository has moved, run the installer again from its
-new path (or re-run the bootstrap one-liner).
+(`emiliosevilla/supagit`). If **behind only**, it fast-forward pulls, reinstalls,
+and re-executes. If the source clone has **diverged** from `origin/main`, the
+run stops with recovery commands (it does not force a pull). Set
+`SUPAGIT_SKIP_UPDATE=1` to skip that check (tests / one-shot re-exec). If the
+source repository has moved, run the installer again from its new path (or
+re-run the bootstrap one-liner).
 
 ## Configuration
 
@@ -203,22 +205,36 @@ The menu has two labeled blocks:
   pipeline prompt). Press Enter for the configured default order, or enter
   comma-separated numbers or branch names to reorder.
 
-After both prompts, a numbered **execution plan** is printed in cyan, followed
-by a green confirmation (`[Y/n]` / `[S/n]`; Enter = yes).
+After both prompts, `supagit` measures a **Situation** report (cyan preflight:
+sync findings and proposed cures such as publish-then-ff or feature
+fast-forward). Blocked cases (diverged histories, dirty feature behind upstream,
+empty PR) stop with actionable commands. Then a numbered **execution plan** is
+printed in cyan (including those cures), followed by a green confirmation
+(`[Y/n]` / `[S/n]`; Enter = yes).
 
 Selected features are integrated through GitHub pull requests merged into the
 first pipeline branch. The `gh` CLI must be installed and authenticated. Dirty
-feature worktrees are committed and pushed first.
+feature worktrees are committed and pushed first. Clean feature branches that
+are behind their upstream are fast-forwarded in the correct worktree (or via
+ref update without checking them out onto `pipeline[0]`) before opening a PR.
+Empty `base..head` ranges are refused before `gh pr create`.
 
-After integration (or when integrate is empty), the main checkout is placed on
-the first pipeline branch and that branch is fast-forward synced with its
-remote (ff-only; diverged histories stop the run).
+Phase order after plan Confirm:
+
+1. Ensure checkout on the first pipeline branch.
+2. **Publish** local changes on that branch (commit/push when needed). A clean
+   tree that is only behind defers sync to the ff step.
+3. **Integrate** selected features (with feature ff when behind-only).
+4. **Fast-forward** the first pipeline branch to its remote (ff-only; refused
+   while the worktree is dirty; never `reset --hard` on a dirty tree).
+5. Checks, optional migrations, promote adjacent pairs, optional cleanup.
 
 ### Promotion
 
-The pipeline publishes local changes on the first branch, runs configured
-checks, migrates the backend configured for each destination branch when
-present, promotes each adjacent branch pair, and returns to the first branch.
+The pipeline runs checks, migrates the backend configured for each destination
+branch when present, promotes each adjacent branch pair, and returns to the
+first pipeline branch. (Local publish on the first branch already ran before
+feature integrate / ff, as above.)
 
 For each promotion into a destination branch, `supagit` asks GitHub (via `gh`)
 whether that branch is protected by an active **ruleset** or classic branch
@@ -241,7 +257,7 @@ by itself change the mode (only branch rules do).
 | `--dry-run` | Preview the plan without mutating Git or Supabase. Skips routine Continue? gates; still confirms at the execution plan. |
 | `--lang en\|es` | UI language (skips the language menu). Also `SUPAGIT_LANG`. Required with `--yes` / non-TTY. |
 | `--backend` | Backend for `init` or auto-init when `.supagit.json` is missing (`none` / `supabase`). |
-| `--no-sweep` | Skip menu and feature integration; still explains and relocates the checkout to the first pipeline branch when needed (fail-closed if dirty) and ff-only syncs that branch. |
+| `--no-sweep` | Skip menu and feature integration; still runs Situation preflight for the first pipeline branch, explains and relocates the checkout when needed (fail-closed if dirty), publishes when appropriate, and ff-only syncs that branch. |
 | `--integrate` | Comma-separated feature branches, or `none` (non-interactive). |
 | `--pipeline` | Comma-separated ordered pipeline branches (non-interactive). |
 | `--yes` | Skip confirmations; requires `--integrate` and `--pipeline` unless `--no-sweep`. |
@@ -276,7 +292,12 @@ integration uses GitHub merge commits via `gh` and requires `gh` to be available
   happen if you proceed (skipped under `--yes` / non-TTY).
 - `NO_COLOR` and `--no-color` disable color; `--color always` forces it.
 - The command never uses forced Git operations and does not infer an ambiguous
-  deployment target.
+  deployment target. It will not stash, force-push, auto-rebase, or
+  `reset --hard` while the worktree is dirty; diverged histories and empty PRs
+  fail closed with recovery text.
 - Agents must measure layout, worktrees, and status; run `--dry-run` first; and
   obtain explicit confirmation before a mutating run. See
   [`docs/supagit-agent-command.md`](docs/supagit-agent-command.md).
+- Supabase **recovery** UX (ambiguous refs, migrate failure diagnosis, credential
+  repair) is intentionally deferred; see
+  [`docs/superpowers/backlog/2026-08-11-supabase-hardening.md`](docs/superpowers/backlog/2026-08-11-supabase-hardening.md).

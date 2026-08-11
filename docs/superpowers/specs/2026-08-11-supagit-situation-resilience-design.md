@@ -125,16 +125,20 @@ language / welcome
 
 **Never do:** stash, force-push, auto-rebase, `reset --hard` on dirty trees; unsupported `gh` flags.
 
-## Later design sections (indicative — not approved detail yet)
+## Later design sections (wave-1 follow-ons)
 
-These belong to the same product goal but are **implementation follow-ons** after Section 1’s module exists:
+Git + self-update items 2–6 are implemented on `main`. Item 7 (this docs/backlog
+pass) lands with the matching plan under `docs/superpowers/plans/`.
 
-2. Wire preflight into `Pipeline.run` and plan rendering  
-3. Reorder publish ↔ ff_sync; harden `ff_sync` dirty gate  
-4. Feature integrate: correct worktree/checkout + behind_only ff  
-5. Self-update diverge Situation  
-6. Empty-PR / gh create preflight  
+2. ~~Wire preflight into `Pipeline.run` and plan rendering~~  
+3. ~~Reorder publish ↔ ff_sync; harden `ff_sync` dirty gate~~  
+4. ~~Feature integrate: correct worktree/checkout + behind_only ff~~  
+5. ~~Self-update diverge Situation~~  
+6. ~~Empty-PR / gh create preflight~~  
 7. Docs (README + agent skill) + backlog note for Supabase  
+
+Supabase recovery hardening remains deferred:
+`docs/superpowers/backlog/2026-08-11-supabase-hardening.md`.
 
 ## Relationship to prior specs
 
