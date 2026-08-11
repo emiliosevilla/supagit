@@ -548,6 +548,66 @@ class I18nAndUpdateTests(unittest.TestCase):
         with patch.object(update, "_run", side_effect=fake_run):
             self.assertFalse(update.needs_update(Path("/tmp")))
 
+    def test_needs_update_false_when_ahead_only(self) -> None:
+        update = MODULE.supagit_update
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "0\t3"
+            raise AssertionError(cmd)
+
+        with patch.object(update, "_run", side_effect=fake_run):
+            self.assertFalse(update.needs_update(Path("/tmp/source")))
+
+    def test_needs_update_raises_when_diverged(self) -> None:
+        MODULE.supagit_i18n.set_lang("en")
+        update = MODULE.supagit_update
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "1\t1"
+            raise AssertionError(cmd)
+
+        with patch.object(update, "_run", side_effect=fake_run):
+            with self.assertRaises(update.UpdateError) as ctx:
+                update.needs_update(Path("/tmp/source"))
+        text = str(ctx.exception)
+        self.assertIn("diverged", text.lower())
+        self.assertIn("git fetch", text)
+        self.assertIn("origin/main...HEAD", text)
+
+    def test_pull_and_reinstall_refuses_diverged(self) -> None:
+        MODULE.supagit_i18n.set_lang("en")
+        update = MODULE.supagit_update
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "2\t1"
+            if cmd[:2] == ["git", "pull"]:
+                raise AssertionError("must not pull when diverged")
+            raise AssertionError(cmd)
+
+        with patch.object(update, "_run", side_effect=fake_run):
+            with self.assertRaises(update.UpdateError) as ctx:
+                update.pull_and_reinstall(Path("/tmp/source"))
+        self.assertIn("diverged", str(ctx.exception).lower())
+        self.assertNotIn("pull", str(ctx.exception).lower())
+
     def test_needs_skip_update_env(self) -> None:
         with patch.dict(os.environ, {MODULE.supagit_update.SKIP_ENV: "1"}):
             self.assertTrue(MODULE.needs_skip_update())

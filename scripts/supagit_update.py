@@ -8,6 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from supagit_i18n import t
+from supagit_situation import SyncStatus, classify_sync_counts
+
 
 class UpdateError(RuntimeError):
     pass
@@ -56,7 +59,12 @@ def assert_github_source(source_root: Path) -> None:
         )
 
 
-def commits_behind(source_root: Path, remote: str = DEFAULT_REMOTE, branch: str = DEFAULT_BRANCH) -> int:
+def sync_counts(
+    source_root: Path,
+    remote: str = DEFAULT_REMOTE,
+    branch: str = DEFAULT_BRANCH,
+) -> tuple[int, int]:
+    """Return (remote_only, local_only) for {remote}/{branch}...HEAD after fetch."""
     _run(source_root, "git", "fetch", remote, branch)
     ahead_behind = _run(
         source_root,
@@ -66,16 +74,62 @@ def commits_behind(source_root: Path, remote: str = DEFAULT_REMOTE, branch: str 
         "--count",
         f"{remote}/{branch}...HEAD",
     )
-    remote_only, _local_only = (int(part) for part in ahead_behind.split())
+    parts = ahead_behind.split()
+    if len(parts) != 2:
+        raise UpdateError(
+            f"Could not compute ahead/behind for {remote}/{branch}...HEAD "
+            f"(got {ahead_behind!r})."
+        )
+    remote_only, local_only = (int(part) for part in parts)
+    return remote_only, local_only
+
+
+def commits_behind(
+    source_root: Path, remote: str = DEFAULT_REMOTE, branch: str = DEFAULT_BRANCH
+) -> int:
+    remote_only, _local_only = sync_counts(source_root, remote=remote, branch=branch)
     return remote_only
+
+
+def self_update_sync_status(
+    source_root: Path,
+    remote: str = DEFAULT_REMOTE,
+    branch: str = DEFAULT_BRANCH,
+) -> SyncStatus:
+    remote_only, local_only = sync_counts(source_root, remote=remote, branch=branch)
+    return classify_sync_counts(ahead=local_only, behind=remote_only)
+
+
+def ensure_self_update_allowed(
+    source_root: Path,
+    remote: str = DEFAULT_REMOTE,
+    branch: str = DEFAULT_BRANCH,
+) -> SyncStatus:
+    """Raise UpdateError when the source clone has diverged from upstream."""
+    status = self_update_sync_status(source_root, remote=remote, branch=branch)
+    if status == SyncStatus.DIVERGED:
+        raise UpdateError(
+            t(
+                "error_self_update_diverged",
+                path=str(source_root),
+                remote=remote,
+                branch=branch,
+            )
+        )
+    return status
 
 
 def needs_update(source_root: Path) -> bool:
     assert_github_source(source_root)
-    return commits_behind(source_root) > 0
+    status = ensure_self_update_allowed(source_root)
+    return status == SyncStatus.BEHIND_ONLY
 
 
 def pull_and_reinstall(source_root: Path) -> None:
+    assert_github_source(source_root)
+    status = ensure_self_update_allowed(source_root)
+    if status != SyncStatus.BEHIND_ONLY:
+        return
     _run(source_root, "git", "pull", "--ff-only", DEFAULT_REMOTE, DEFAULT_BRANCH)
     installer = source_root / "scripts" / "install-supagit-global.sh"
     if not installer.is_file():

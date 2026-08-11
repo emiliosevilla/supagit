@@ -154,6 +154,14 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "update_found": "[supagit] Update available; pulling and reinstalling…",
         "update_done_reexec": "[supagit] Update installed; restarting…",
         "update_failed": "Could not update supagit from GitHub: {detail}",
+        "error_self_update_diverged": (
+            "The registered supagit source clone at {path} has diverged from "
+            "{remote}/{branch}. Do not auto-update; reconcile manually, for example:\n"
+            "  cd {path}\n"
+            "  git fetch {remote}\n"
+            "  git log --oneline --left-right {remote}/{branch}...HEAD\n"
+            "Then re-run scripts/install-supagit-global.sh from a clean clone if needed."
+        ),
         "update_no_source": (
             "Cannot locate the registered supagit source-root clone. "
             "Re-run scripts/install-supagit-global.sh from a clone of "
@@ -448,6 +456,15 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "update_found": "[supagit] Hay actualización; descargando y reinstalando…",
         "update_done_reexec": "[supagit] Actualización instalada; reiniciando…",
         "update_failed": "No se pudo actualizar supagit desde GitHub: {detail}",
+        "error_self_update_diverged": (
+            "El clon source-root de supagit en {path} ha divergido de "
+            "{remote}/{branch}. No se actualiza automáticamente; reconcílialo a mano, "
+            "por ejemplo:\n"
+            "  cd {path}\n"
+            "  git fetch {remote}\n"
+            "  git log --oneline --left-right {remote}/{branch}...HEAD\n"
+            "Luego vuelve a ejecutar scripts/install-supagit-global.sh desde un clon limpio si hace falta."
+        ),
         "update_no_source": (
             "No se encuentra el source-root registrado de supagit. "
             "Vuelve a ejecutar scripts/install-supagit-global.sh desde un clon de "
