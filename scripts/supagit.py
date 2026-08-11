@@ -1190,6 +1190,16 @@ class Pipeline:
         )
         pr_number = gh.find_open_pr(source, target)
         if pr_number is None:
+            try:
+                supagit_sweep.assert_commits_for_pr(
+                    self._sweep_git,
+                    head=source,
+                    base=target,
+                    remote=self.remote,
+                    cwd=self.root,
+                )
+            except supagit_sweep.SweepError as exc:
+                raise ShipError(str(exc)) from exc
             title = f"supagit: promote {source} → {target}"
             pr_number = gh.create_promote_pr(source, target, title)
             self.explain(t("promote_pr_created", number=pr_number, source=source, target=target))

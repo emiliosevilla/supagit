@@ -471,6 +471,65 @@ def _branch_has_upstream(run_git: GitRunner, branch: str, *, cwd: Path) -> bool:
         return False
 
 
+def assert_commits_for_pr(
+    run_git: GitRunner,
+    *,
+    head: str,
+    base: str,
+    remote: str,
+    cwd: Path,
+) -> int:
+    """Return how many commits head is ahead of base; raise if the PR would be empty."""
+    remote_base = f"{remote}/{base}"
+    try:
+        run_git(
+            "fetch",
+            remote,
+            f"refs/heads/{base}:refs/remotes/{remote}/{base}",
+            cwd=cwd,
+        )
+    except Exception:
+        pass
+
+    base_ref = base
+    try:
+        run_git("rev-parse", "--verify", remote_base, cwd=cwd)
+        base_ref = remote_base
+    except Exception:
+        try:
+            run_git("rev-parse", "--verify", base, cwd=cwd)
+        except Exception as exc:
+            raise SweepError(
+                f"Cannot resolve base branch {base!r} (or {remote_base}) to check for an empty PR."
+            ) from exc
+
+    try:
+        run_git("rev-parse", "--verify", head, cwd=cwd)
+    except Exception as exc:
+        raise SweepError(
+            f"Cannot resolve head branch {head!r} to check for an empty PR."
+        ) from exc
+
+    raw = run_git("rev-list", "--count", f"{base_ref}..{head}", cwd=cwd).strip()
+    try:
+        count = int(raw)
+    except ValueError as exc:
+        raise SweepError(
+            f"Could not count commits for {base_ref}..{head} (got {raw!r})."
+        ) from exc
+
+    if count == 0:
+        raise SweepError(
+            t(
+                "error_empty_pr",
+                head=head,
+                base=base,
+                base_ref=base_ref,
+            )
+        )
+    return count
+
+
 def push_branch(
     run_git: GitRunner,
     remote: str,
@@ -507,7 +566,9 @@ def integrate_branch(
     contained_in_first: bool,
 ) -> None:
     if contained_in_first:
-        raise SweepError("nothing to integrate")
+        raise SweepError(
+            t("error_nothing_to_integrate", branch=branch, base=base)
+        )
 
     gh.ensure_ready()
     gh.ensure_github_remote(remote_url)
@@ -535,6 +596,13 @@ def integrate_branch(
 
     pr_number = gh.find_open_pr(branch, base)
     if pr_number is None:
+        assert_commits_for_pr(
+            run_git,
+            head=branch,
+            base=base,
+            remote=remote,
+            cwd=cwd,
+        )
         title = f"supagit: integrate {branch} into {base}"
         pr_number = gh.create_pr(branch, base, title)
 
