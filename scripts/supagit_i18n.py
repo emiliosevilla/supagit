@@ -133,6 +133,13 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Branch {branch} is already included in {base}; it needs no new pull request. "
             "Omit it, press Enter for defaults, or type 0/none to skip all work branches."
         ),
+        "error_nothing_to_integrate": (
+            "Branch {branch} is already contained in {base}; nothing to integrate."
+        ),
+        "error_empty_pr": (
+            "No commits to put in a pull request from {head} into {base} "
+            "({base_ref}..{head} is empty). Omit this branch or add commits first."
+        ),
         "error_integrate_number": (
             "Invalid independent-work number: {token}. Use the numbers shown next to "
             "worktrees / other local work."
@@ -433,6 +440,13 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "La rama {branch} ya está incluida en {base}; no necesita una pull request nueva. "
             "Omítela, pulsa Enter para los valores por defecto, o escribe 0/ninguno para "
             "omitir todo el trabajo independiente."
+        ),
+        "error_nothing_to_integrate": (
+            "La rama {branch} ya está contenida en {base}; no hay nada que integrar."
+        ),
+        "error_empty_pr": (
+            "No hay commits para una pull request de {head} hacia {base} "
+            "({base_ref}..{head} está vacío). Omite esa rama o añade commits primero."
         ),
         "error_integrate_number": (
             "Número de trabajo independiente no válido: {token}. Usa los números junto a "

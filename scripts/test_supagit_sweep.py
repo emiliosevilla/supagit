@@ -806,6 +806,8 @@ class IntegrateBranchTests(unittest.TestCase):
                 return "feature/x\n"
             if args[:3] == ("rev-list", "--left-right", "--count"):
                 return "0\t0"
+            if args[:2] == ("rev-list", "--count"):
+                return "2"
             if args[0] == "rev-parse":
                 return "abc"
             if args[0] == "push":
@@ -831,6 +833,87 @@ class IntegrateBranchTests(unittest.TestCase):
         )
         self.assertIn("create:feature/x->dev:supagit: integrate feature/x into dev", actions)
         self.assertIn("merge:9", actions)
+
+    def test_integrate_refuses_empty_pr_before_create(self) -> None:
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+        created = False
+
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                return None
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                return None
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                return None
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                nonlocal created
+                created = True
+                raise AssertionError("must not create empty PR")
+
+            def merge_pr(self, number: int) -> None:
+                raise AssertionError("must not merge")
+
+        def run_git(*args, cwd=None, capture=True):
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "feature/x\n"
+            if args[:3] == ("rev-list", "--left-right", "--count"):
+                return "0\t0"
+            if args[:2] == ("rev-list", "--count"):
+                return "0"
+            if args[0] == "rev-parse":
+                return "abc"
+            if args[0] == "push":
+                return ""
+            if args[0] == "fetch":
+                return ""
+            if args[:2] == ("rev-parse", "--abbrev-ref"):
+                return "origin/feature/x\n"
+            return "ok"
+
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
+            supagit_sweep.integrate_branch(
+                run_git,
+                gh=FakeGh(),
+                remote="origin",
+                remote_url="git@github.com:acme/demo.git",
+                branch="feature/x",
+                base="dev",
+                cwd=Path("/wt"),
+                message_provider=lambda: "unused",
+                reject_sensitive=lambda paths: None,
+                dry_run=False,
+                contained_in_first=False,
+            )
+        self.assertFalse(created)
+        self.assertIn("empty", str(ctx.exception).lower())
+        self.assertIn("feature/x", str(ctx.exception))
+
+    def test_assert_commits_for_pr_ok(self) -> None:
+        def run_git(*args, cwd=None, capture=True):
+            if args[0] == "fetch":
+                return ""
+            if args[:2] == ("rev-parse", "--verify"):
+                return "ok"
+            if args[:2] == ("rev-list", "--count"):
+                self.assertEqual(args[2], "origin/dev..feature/x")
+                return "3"
+            raise AssertionError(args)
+
+        count = supagit_sweep.assert_commits_for_pr(
+            run_git,
+            head="feature/x",
+            base="dev",
+            remote="origin",
+            cwd=Path("/wt"),
+        )
+        self.assertEqual(count, 3)
 
     def test_integrate_ffs_clean_behind_feature_before_push(self) -> None:
         actions: list[str] = []
