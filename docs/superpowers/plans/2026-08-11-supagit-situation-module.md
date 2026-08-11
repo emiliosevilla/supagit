@@ -148,7 +148,7 @@ Rules (encode exactly):
 - `BEHIND_ONLY` or `AHEAD_ONLY` + dirty + role `pipeline0` → `SAFE_CURE` with cure id `publish_then_ff` (not ff-while-dirty)
 - `BEHIND_ONLY` + dirty + role `feature` → `BLOCKED` until clean/commit on that feature (no stash)
 - `IN_SYNC` → `INFO`
-- `NO_UPSTREAM` → `INFO` in Section 1
+- `NO_UPSTREAM` + role feature needing push → `BLOCKED` or `INFO` per tests below (`BLOCKED` if role is feature and we require upstream for sync cures; `INFO` for pipeline0 local-only notes — use `INFO` for `NO_UPSTREAM` in Section 1)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -184,6 +184,7 @@ Expected: FAIL
 
 ```python
 from dataclasses import dataclass
+from enum import Enum
 
 
 class PolicyClass(str, Enum):
@@ -213,6 +214,7 @@ def classify_ref_finding(
         SyncStatus.AHEAD_ONLY,
         SyncStatus.IN_SYNC,
     }:
+        # Dirty on first branch: publish path; if also behind, publish then ff.
         if sync is SyncStatus.BEHIND_ONLY:
             return Finding(PolicyClass.SAFE_CURE, "publish_then_ff", sync, dirty, role)
         return Finding(PolicyClass.SAFE_CURE, "publish_only", sync, dirty, role)
@@ -295,22 +297,22 @@ class BranchSync:
 - Modify: `scripts/test_supagit_situation.py`
 
 **Interfaces:**
-- Consumes: git runner callable
+- Consumes: `GitRunner = Callable[..., str]` compatible with sweep style
 - Produces: `build_branch_sync(git, name, *, remote: str, role: str, worktree_path: str | None) -> tuple[BranchSync, Finding]`
 
 Behavior:
 1. `rev-parse --verify refs/heads/{name}` — missing → `SituationError`
 2. Dirty: `status --porcelain` in worktree_path or cwd
 3. Upstream: `rev-parse --abbrev-ref {name}@{upstream}` — fail → `NO_UPSTREAM`, finding INFO
-4. Else `rev-list --left-right --count {upstream}...{name}` → parse → classify
-
-Counts from `upstream...name`: **left=upstream-only (local behind)**, **right=local-only (local ahead)** — same as `Pipeline.validate_pipeline_head`.
+4. Else `rev-list --left-right --count {upstream}...{name}` → parse → classify_sync → classify_ref_finding
 
 - [ ] **Step 1: Failing test with fake git**
 
 ```python
 class BuildBranchSyncTests(unittest.TestCase):
     def test_behind_clean_feature(self) -> None:
+        # Counts from `upstream...name`: left=upstream-only (local behind),
+        # right=local-only (local ahead) — same as Pipeline.validate_pipeline_head.
         def git(*args, **kwargs):
             cmd = list(args)
             if cmd[:2] == ("rev-parse", "--verify"):
@@ -330,6 +332,8 @@ class BuildBranchSyncTests(unittest.TestCase):
         self.assertEqual(finding.cure_id, "ff_only")
 ```
 
+Document in code comment: counts from `upstream...name` use **left=upstream-only (behind for local)**, **right=local-only (ahead)** — same as `validate_pipeline_head`.
+
 - [ ] **Steps 2–5:** fail → implement → pass → commit
 
 ---
@@ -343,10 +347,17 @@ class BuildBranchSyncTests(unittest.TestCase):
 
 **Interfaces:**
 - Produces:
-  - `@dataclass Situation`: `current_branch`, `dirty`, `pipeline0`, `features`, `findings`, `gh_ready`, `self_update`
-  - `render_preflight(situation: Situation) -> str`
+  - `@dataclass Situation`: `current_branch`, `dirty`, `pipeline0: BranchSync | None`, `features: tuple[BranchSync, ...]`, `findings: tuple[Finding, ...]`, `gh_ready: bool | None`, `self_update: SyncStatus | None`
+  - `render_preflight(situation: Situation) -> str` (plain text; Pipeline wraps cyan)
 
-i18n keys (minimum): `situation_preflight_header`, `situation_finding_ff_only`, `situation_finding_publish_then_ff`, `situation_finding_stop_diverged`, `situation_finding_stop_dirty_feature`, plus Spanish.
+i18n keys (minimum):
+- `situation_preflight_header`
+- `situation_finding_ff_only`
+- `situation_finding_publish_then_ff`
+- `situation_finding_stop_diverged`
+- `situation_finding_stop_dirty_feature`
+- `situation_finding_none` / ok line
+- Spanish equivalents
 
 - [ ] **Step 1: Failing render test**
 
@@ -382,26 +393,55 @@ class RenderPreflightTests(unittest.TestCase):
 ### Task 6: Thin Pipeline hook (print-only)
 
 **Files:**
-- Modify: `scripts/supagit.py`
-- Modify: tests as needed
-- Verify: `scripts/install-supagit-global.sh` ships the new module
+- Modify: `scripts/supagit.py` (`run_branch_menu` after selection / before plan, or start of apply path)
+- Modify: `scripts/test_supagit_sweep.py` or `scripts/test_supagit.py` — assert `explain`/`print` receives preflight when Situation built
+- Modify: `scripts/install-supagit-global.sh` if needed so `supagit_situation.py` is on the install path (installer copies repo scripts dir — verify)
 
 **Behavior (Section 1 only):**
-- After menu selection, build Situation for `pipeline[0]` + integrate branches.
-- `self.explain(render_preflight(sit), ask_continue=False)`.
-- On `SituationError` → `ShipError`.
-- **Do not** reorder ff/publish; **do not** auto-execute cures.
+- After menu selection is known, build a **minimal** Situation for `pipeline[0]` + selected integrate branches (reuse inventory dirty flags where possible; call `build_branch_sync` with `self.git`).
+- `self.explain(render_preflight(sit), ask_continue=False)` so cyan shows without extra Continue? (plan Confirm remains the gate).
+- On `SituationError`, raise `ShipError`.
+- **Do not** reorder ff/publish yet; **do not** auto-execute cures.
 
-- [ ] **Steps 1–5:** failing orchestration test → wire → full suites → commit
+- [ ] **Step 1: Failing orchestration test** — mock `build_situation_for_selection` / patch render to a sentinel and assert it appears in explain messages during `run_branch_menu`.
+
+- [ ] **Steps 2–5:** wire → pass full suites → commit
+
+```bash
+SUPAGIT_SKIP_UPDATE=1 python3 -m unittest scripts.test_supagit scripts.test_supagit_sweep scripts.test_supagit_situation
+git add scripts/supagit.py scripts/supagit_situation.py scripts/supagit_i18n.py scripts/test_*.py scripts/install-supagit-global.sh
+git commit -m "Show Situation preflight after sweeper menu selection."
+```
 
 ---
 
-### Task 7: Section 1 verification + docs
+### Task 7: Section 1 verification + docs pointer
 
-- [ ] **Step 1:** `SUPAGIT_SKIP_UPDATE=1 python3 -m unittest scripts.test_supagit scripts.test_supagit_sweep scripts.test_supagit_situation`
-- [ ] **Step 2:** Manual `SUPAGIT_SKIP_UPDATE=1 scripts/supagit --dry-run --lang en` — cyan preflight before plan
-- [ ] **Step 3:** Confirm installer includes `supagit_situation.py`
-- [ ] **Step 4:** Commit these docs if not already (human)
+- [ ] **Step 1: Run full verification**
+
+```bash
+SUPAGIT_SKIP_UPDATE=1 python3 -m unittest scripts.test_supagit scripts.test_supagit_sweep scripts.test_supagit_situation
+```
+
+Expected: OK
+
+- [ ] **Step 2: Manual dry-run smoke** (human)
+
+```bash
+SUPAGIT_SKIP_UPDATE=1 scripts/supagit --dry-run --lang en
+```
+
+Expected: after menu answers, cyan preflight block appears before execution plan; no mutations.
+
+- [ ] **Step 3: Confirm installer ships module**
+
+```bash
+grep -n situation scripts/install-supagit-global.sh || ls "$(git rev-parse --show-toplevel)/scripts/supagit_situation.py"
+```
+
+If installer copies whole `scripts/` via source-root, document that in the commit message; if it allowlists files, add `supagit_situation.py`.
+
+- [ ] **Step 4: Commit docs if not already** (human)
 
 ```bash
 git add docs/superpowers/specs/2026-08-11-supagit-situation-resilience-design.md docs/superpowers/plans/2026-08-11-supagit-situation-module.md
