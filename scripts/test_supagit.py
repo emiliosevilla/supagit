@@ -912,6 +912,42 @@ class CheckoutFlexTests(unittest.TestCase):
         self.assertIn("git fetch", str(ctx.exception))
         self.assertIn("origin/dev...dev", str(ctx.exception))
 
+    def test_commit_and_publish_defers_when_clean_and_behind(self) -> None:
+        MODULE.supagit_i18n.set_lang("en")
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.dev = "dev"
+        pipeline.remote = "origin"
+        calls: list[tuple] = []
+        printed: list[str] = []
+
+        def git(*args, capture: bool = False, check: bool = True, mutating: bool = False, cwd=None):
+            calls.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:3] == ("rev-list", "--left-right", "--count"):
+                return "2\t0\n"
+            raise AssertionError(args)
+
+        pipeline.git = git  # type: ignore[method-assign]
+        import builtins
+
+        original = builtins.print
+        builtins.print = printed.append  # type: ignore[assignment]
+        try:
+            pipeline.commit_and_publish_dev()
+        finally:
+            builtins.print = original  # type: ignore[assignment]
+
+        self.assertFalse(any(c[0] == "push" for c in calls))
+        self.assertTrue(any("behind" in p.lower() for p in printed if isinstance(p, str)))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ from typing import Callable, Sequence
 import re
 
 from supagit_inventory import RepoInventory
+from supagit_i18n import t
 
 GitRunner = Callable[..., str]
 RejectSensitive = Callable[[Sequence[str]], None]
@@ -231,6 +232,10 @@ def ff_sync_branch(
     *,
     dry_run: bool,
 ) -> SyncResult:
+    dirty = run_git("status", "--porcelain").strip()
+    if dirty:
+        raise SweepError(t("error_ff_dirty", branch=branch))
+
     remote_ref = f"{remote}/{branch}"
     _fetch_remote_branch(run_git, remote, branch, remote_ref)
     before = run_git("rev-parse", branch)

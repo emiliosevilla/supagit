@@ -964,6 +964,23 @@ class Pipeline:
             self._reject_sensitive_paths(staged.splitlines())
             self.git("diff", "--cached", "--check")
             self.git("commit", "-m", message, mutating=True)
+            relation = self.git(
+                "rev-list",
+                "--left-right",
+                "--count",
+                f"{self.remote}/{self.dev}...{self.dev}",
+                capture=True,
+            ).strip()
+            remote_only, local_only = (int(part) for part in relation.split())
+            if remote_only > 0:
+                print(
+                    t(
+                        "publish_skip_push_behind",
+                        branch=self.dev,
+                        remote=self.remote,
+                    )
+                )
+                return
         else:
             relation = self.git(
                 "rev-list",
@@ -971,12 +988,30 @@ class Pipeline:
                 "--count",
                 f"{self.remote}/{self.dev}...{self.dev}",
                 capture=True,
-            )
-            if relation.strip() == "0\t0":
-                print(f"Local {self.dev} is already synchronized with {self.remote}/{self.dev}; there is no commit to create.")
+            ).strip()
+            remote_only, local_only = (int(part) for part in relation.split())
+            if remote_only == 0 and local_only == 0:
+                print(
+                    f"Local {self.dev} is already synchronized with "
+                    f"{self.remote}/{self.dev}; there is no commit to create."
+                )
                 self._assert_dev_synced()
                 return
-            print(f"Local {self.dev} contains unpublished commits ({relation.strip()}).")
+            if remote_only > 0 and local_only == 0:
+                print(
+                    t(
+                        "publish_defer_behind",
+                        branch=self.dev,
+                        remote=self.remote,
+                    )
+                )
+                return
+            if remote_only > 0 and local_only > 0:
+                raise ShipError(
+                    f"Local {self.dev} has diverged from {self.remote}/{self.dev} "
+                    f"({relation}). Reconcile manually before publishing."
+                )
+            print(f"Local {self.dev} contains unpublished commits ({relation}).")
             self.tutor_confirm(
                 t("explain_publish_existing", branch=self.dev, remote=self.remote),
                 t("confirm_publish_existing", branch=self.dev, remote=self.remote),
@@ -1604,10 +1639,10 @@ class Pipeline:
         self.ensure_checkout_on_first_branch()
         self.validate_pipeline_head()
         inventory = self.build_inventory()
+        self.commit_and_publish_dev()
         if selection.integrate:
             self.sweep_features(selection, inventory)
         self.ff_sync_first_branch()
-        self.commit_and_publish_dev()
         self._assert_dev_synced()
         self.run_checks()
         self.validate_clean_after_checks()

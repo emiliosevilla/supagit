@@ -268,6 +268,8 @@ class FfSyncTests(unittest.TestCase):
 
         def run_git(*args: str, cwd=None, capture: bool = True) -> str:
             calls.append(tuple(args))
+            if args[:2] == ("status", "--porcelain"):
+                return ""
             if args[:2] == ("fetch", "origin"):
                 raise RuntimeError("network down")
             if args == ("remote", "get-url", "origin"):
@@ -281,8 +283,30 @@ class FfSyncTests(unittest.TestCase):
         with self.assertRaises(supagit_sweep.SweepError) as ctx:
             supagit_sweep.ff_sync_branch(run_git, "dev", "origin", dry_run=False)
         self.assertIn("Could not fetch origin/dev", str(ctx.exception))
-        self.assertEqual(calls[0][:2], ("fetch", "origin"))
+        self.assertEqual(calls[0][:2], ("status", "--porcelain"))
+        self.assertEqual(calls[1][:2], ("fetch", "origin"))
         self.assertIn(("remote", "get-url", "origin"), calls)
+
+    def test_ff_refuses_dirty_worktree(self) -> None:
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+        calls: list[tuple[str, ...]] = []
+
+        def run_git(*args: str, cwd=None, capture: bool = True) -> str:
+            calls.append(tuple(args))
+            if args[:2] == ("status", "--porcelain"):
+                return " M README.md\n"
+            raise AssertionError(f"unexpected git call: {args}")
+
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
+            supagit_sweep.ff_sync_branch(run_git, "dev", "origin", dry_run=False)
+        text = str(ctx.exception).lower()
+        self.assertIn("dirty", text)
+        self.assertIn("dev", str(ctx.exception))
+        self.assertFalse(any(c[0] == "fetch" for c in calls))
+        self.assertFalse(any(c[0] == "merge" for c in calls))
+        self.assertFalse(any(c[:2] == ("reset", "--hard") for c in calls))
 
     def test_ahead_behind_rejects_empty_output(self) -> None:
         def run_git(*args: str, cwd=None, capture: bool = True) -> str:
@@ -1348,8 +1372,8 @@ class OrchestrationTests(unittest.TestCase):
             "run_branch_menu",
             "ensure_checkout_on_first_branch",
             "validate_pipeline_head",
-            "ff_sync_first_branch",
             "commit_and_publish_dev",
+            "ff_sync_first_branch",
             "_assert_dev_synced",
             "run_checks",
             "validate_clean_after_checks",
@@ -1368,6 +1392,10 @@ class OrchestrationTests(unittest.TestCase):
         self.assertLess(
             order.index("ensure_checkout_on_first_branch"),
             order.index("validate_pipeline_head"),
+        )
+        self.assertLess(
+            order.index("commit_and_publish_dev"),
+            order.index("ff_sync_first_branch"),
         )
         self.assertEqual(order[-1], "verify_final_checkout")
 
