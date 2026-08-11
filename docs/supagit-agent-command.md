@@ -158,7 +158,5 @@ the pipeline fails or stops partway through execution.
 Error output emitted by a failed child command is also rendered in red, line by
 line, before the final error summary.
 
-Wave-1 Situation resilience (Git + self-update) is documented in
-`docs/superpowers/specs/2026-08-11-supagit-situation-resilience-design.md`.
 Supabase recovery hardening remains deferred:
 `docs/superpowers/backlog/2026-08-11-supabase-hardening.md`.
