@@ -120,6 +120,81 @@ class RenderPreflightTests(unittest.TestCase):
         self.assertIn("diverg", text.lower())
         self.assertIn("fast-forward", text.lower())
 
+    def test_format_blocked_diverged_includes_commands(self) -> None:
+        f = SIT.Finding(
+            SIT.PolicyClass.BLOCKED,
+            "stop_diverged",
+            SIT.SyncStatus.DIVERGED,
+            False,
+            "pipeline0",
+        )
+        text = SIT.format_blocked_error(f, branch="dev", upstream="origin/dev")
+        self.assertIn("git fetch", text)
+        self.assertIn("origin/dev...dev", text)
+
+    def test_format_blocked_dirty_feature(self) -> None:
+        f = SIT.Finding(
+            SIT.PolicyClass.BLOCKED,
+            "stop_dirty_feature",
+            SIT.SyncStatus.BEHIND_ONLY,
+            True,
+            "feature",
+        )
+        text = SIT.format_blocked_error(f, branch="feature/x", upstream="origin/feature/x")
+        self.assertIn("feature/x", text)
+        self.assertIn("dirty", text.lower())
+
+    def test_plan_cure_lines_orders_feature_then_pipeline0_ff(self) -> None:
+        pipeline0 = SIT.BranchSync(
+            "dev",
+            "origin/dev",
+            SIT.SyncStatus.BEHIND_ONLY,
+            0,
+            2,
+            True,
+            "/repo",
+        )
+        feature = SIT.BranchSync(
+            "feature/x",
+            "origin/feature/x",
+            SIT.SyncStatus.BEHIND_ONLY,
+            0,
+            1,
+            False,
+            "/wt",
+        )
+        findings = (
+            SIT.Finding(
+                SIT.PolicyClass.SAFE_CURE,
+                "publish_then_ff",
+                SIT.SyncStatus.BEHIND_ONLY,
+                True,
+                "pipeline0",
+            ),
+            SIT.Finding(
+                SIT.PolicyClass.SAFE_CURE,
+                "ff_only",
+                SIT.SyncStatus.BEHIND_ONLY,
+                False,
+                "feature",
+            ),
+        )
+        sit = SIT.Situation(
+            current_branch="dev",
+            dirty=True,
+            pipeline0=pipeline0,
+            features=(feature,),
+            findings=findings,
+            gh_ready=None,
+            self_update=None,
+        )
+        lines = SIT.plan_cure_lines(sit, remote="origin")
+        self.assertEqual(len(lines), 2)
+        self.assertIn("feature/x", lines[0])
+        self.assertIn("before integrating", lines[0].lower())
+        self.assertIn("dev", lines[1])
+        self.assertIn("fast-forward", lines[1].lower())
+
 
 class PolicyTests(unittest.TestCase):
     def test_diverged_blocked(self) -> None:

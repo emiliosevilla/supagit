@@ -862,6 +862,56 @@ class CheckoutFlexTests(unittest.TestCase):
             any("Before running the pipeline" in e or "situation" in e.lower() for e in explained)
         )
 
+    def test_situation_preflight_raises_on_diverged(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=False,
+            integrate="none",
+            pipeline_order="dev",
+        )
+        pipeline.branches = ("dev",)
+        pipeline.remote = "origin"
+        pipeline.root = Path("/repo")
+        pipeline.original_branch = "dev"
+        pipeline.explain = lambda *a, **k: None  # type: ignore[method-assign]
+
+        inv = MODULE.supagit_inventory.RepoInventory(
+            MODULE.supagit_layout.RepoLayout(
+                Path("/repo"), Path("/repo"), Path("/repo/.git"), False
+            ),
+            (),
+            (
+                MODULE.supagit_inventory.BranchInfo(
+                    "dev", True, True, Path("/repo"), 0, 0, True, "origin/dev", False
+                ),
+            ),
+            "dev",
+        )
+
+        def situation_git(*args, **kwargs):
+            cmd = list(args)
+            if cmd[:2] == ["rev-parse", "--verify"]:
+                return "abc\n"
+            if cmd[0] == "status":
+                return ""
+            if cmd[:2] == ["rev-parse", "--abbrev-ref"]:
+                return "origin/dev\n"
+            if cmd[:3] == ["rev-list", "--left-right", "--count"]:
+                return "1\t1\n"
+            raise AssertionError(cmd)
+
+        pipeline._situation_git = situation_git  # type: ignore[method-assign]
+        selection = MODULE.supagit_menu.MenuSelection(integrate=(), pipeline=("dev",))
+        with self.assertRaises(MODULE.ShipError) as ctx:
+            pipeline._explain_situation_preflight(selection, inv)
+        self.assertIn("git fetch", str(ctx.exception))
+        self.assertIn("origin/dev...dev", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

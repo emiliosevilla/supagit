@@ -11,6 +11,7 @@ from supagit_inventory import (
     independent_work_branches,
 )
 from supagit_i18n import t
+from supagit_situation import Situation, feature_ff_line, pipeline0_ff_line
 
 
 class MenuError(RuntimeError):
@@ -253,19 +254,30 @@ def render_execution_plan(
     *,
     first_branch: str | None = None,
     remote: str | None = None,
+    situation: Situation | None = None,
 ) -> str:
     lines: list[str] = [t("plan_header")]
     base = selection.pipeline[0]
-
-    if selection.integrate:
-        for branch in selection.integrate:
-            lines.append(t("plan_integrate_item", branch=branch, base=base))
-    else:
-        lines.append(t("plan_none_integrate"))
+    remote_name = remote or "origin"
 
     publish_branch = first_branch or base
     if remote is not None:
         lines.append(t("plan_publish_item", branch=publish_branch, remote=remote))
+
+    if selection.integrate:
+        for branch in selection.integrate:
+            if situation is not None:
+                feature_ff = feature_ff_line(situation, branch, remote=remote_name)
+                if feature_ff:
+                    lines.append(feature_ff)
+            lines.append(t("plan_integrate_item", branch=branch, base=base))
+    else:
+        lines.append(t("plan_none_integrate"))
+
+    if situation is not None:
+        pipeline_ff = pipeline0_ff_line(situation, remote=remote_name)
+        if pipeline_ff:
+            lines.append(pipeline_ff)
 
     for source, target in zip(selection.pipeline, selection.pipeline[1:]):
         lines.append(t("plan_promote_item", source=source, target=target))

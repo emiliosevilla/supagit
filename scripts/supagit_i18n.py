@@ -111,6 +111,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_header": "This is what I will do:",
         "plan_integrate_item": "Integrate {branch} into {base} via a GitHub pull request",
         "plan_publish_item": "Publish {branch} to {remote}",
+        "plan_ff_item": "Fast-forward {branch} to {upstream}",
+        "plan_ff_feature_item": "Fast-forward {branch} to {upstream} before integrating",
         "plan_migrate_item": "Apply pending migrations to {label} ({ref})",
         "plan_promote_item": "Merge {source} into {target} and publish {target}",
         "plan_none_integrate": "No independent work branches to integrate.",
@@ -267,6 +269,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "situation_finding_publish_then_ff": (
             "• {role}: dirty and behind upstream — publish first, then fast-forward."
         ),
+        "situation_finding_publish_only": (
+            "• {role}: dirty — publish local changes first."
+        ),
         "situation_finding_stop_diverged": (
             "• {role}: diverged from upstream — reconcile manually before continuing."
         ),
@@ -274,6 +279,16 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "• {role}: dirty feature branch behind upstream — commit changes on the feature branch first."
         ),
         "situation_finding_none": "• {role}: no sync action needed.",
+        "situation_error_diverged": (
+            "Branch {branch} has diverged from {upstream}. Reconcile manually before continuing, "
+            "for example:\n"
+            "  git fetch\n"
+            "  git log --oneline --left-right {upstream}...{branch}"
+        ),
+        "situation_error_dirty_feature": (
+            "Feature branch {branch} is dirty and behind its upstream. Commit (or stash outside "
+            "supagit) on that branch first, then re-run."
+        ),
     },
     "es": {
         "lang_menu": "Language / Idioma:\n  (1) English\n  (2) Español\nOpción [1/2]: ",
@@ -375,6 +390,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_header": "Esto es lo que voy a hacer:",
         "plan_integrate_item": "Integrar {branch} en {base} mediante una pull request de GitHub",
         "plan_publish_item": "Publicar {branch} en {remote}",
+        "plan_ff_item": "Avanzar {branch} hasta {upstream} (fast-forward)",
+        "plan_ff_feature_item": "Avanzar {branch} hasta {upstream} (fast-forward) antes de integrar",
         "plan_migrate_item": "Aplicar migraciones pendientes a {label} ({ref})",
         "plan_promote_item": "Fusionar {source} en {target} y publicar {target}",
         "plan_none_integrate": "No hay ramas de trabajo independientes que integrar.",
@@ -536,6 +553,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "situation_finding_publish_then_ff": (
             "• {role}: sucia y por detrás del upstream — publicar primero y luego fast-forward."
         ),
+        "situation_finding_publish_only": (
+            "• {role}: sucia — publicar primero los cambios locales."
+        ),
         "situation_finding_stop_diverged": (
             "• {role}: divergió del upstream — reconcíliala manualmente antes de continuar."
         ),
@@ -543,6 +563,16 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "• {role}: rama de trabajo sucia y por detrás del upstream — confirma los cambios en la rama primero."
         ),
         "situation_finding_none": "• {role}: no hace falta ninguna acción de sincronización.",
+        "situation_error_diverged": (
+            "La rama {branch} ha divergido de {upstream}. Reconcíliala manualmente antes de continuar, "
+            "por ejemplo:\n"
+            "  git fetch\n"
+            "  git log --oneline --left-right {upstream}...{branch}"
+        ),
+        "situation_error_dirty_feature": (
+            "La rama de trabajo {branch} está sucia y por detrás de su upstream. Confirma "
+            "(o haz stash fuera de supagit) en esa rama y vuelve a ejecutar."
+        ),
     },
 }
 

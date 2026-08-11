@@ -1299,12 +1299,13 @@ class Pipeline:
                     default_pipeline=self.branches,
                     interactive=True,
                 )
-                self._explain_situation_preflight(selection, inventory)
+                situation = self._explain_situation_preflight(selection, inventory)
                 self.explain(
                     supagit_menu.render_execution_plan(
                         selection,
                         first_branch=selection.pipeline[0],
                         remote=self.remote,
+                        situation=situation,
                     )
                     + "\n"
                     + t("explain_plan"),
@@ -1384,12 +1385,35 @@ class Pipeline:
 
     def _explain_situation_preflight(
         self, selection: MenuSelection, inventory: RepoInventory
-    ) -> None:
+    ) -> Situation:
         situation = self.build_situation_for_selection(selection, inventory)
         self.explain(
             supagit_situation.render_preflight(situation),
             ask_continue=False,
         )
+        for finding in situation.findings:
+            if finding.policy != supagit_situation.PolicyClass.BLOCKED:
+                continue
+            branch = selection.pipeline[0]
+            upstream: str | None = None
+            if finding.role == "pipeline0" and situation.pipeline0 is not None:
+                branch = situation.pipeline0.name
+                upstream = situation.pipeline0.upstream
+            elif finding.role == "feature":
+                feature_findings = [
+                    f for f in situation.findings if f.role == "feature"
+                ]
+                for feat_finding, sync in zip(feature_findings, situation.features):
+                    if feat_finding is finding:
+                        branch = sync.name
+                        upstream = sync.upstream
+                        break
+            raise ShipError(
+                supagit_situation.format_blocked_error(
+                    finding, branch=branch, upstream=upstream
+                )
+            )
+        return situation
 
     def apply_menu_selection(self, selection: MenuSelection) -> None:
         self.branches = tuple(selection.pipeline)
@@ -1573,6 +1597,7 @@ class Pipeline:
         inventory = self.build_inventory()
         if self.options.no_sweep:
             selection = MenuSelection(integrate=(), pipeline=tuple(self.branches))
+            self._explain_situation_preflight(selection, inventory)
         else:
             selection = self.run_branch_menu(inventory)
         self.apply_menu_selection(selection)

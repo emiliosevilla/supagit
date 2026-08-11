@@ -59,6 +59,7 @@ class Situation:
 _FINDING_I18N: dict[str, str] = {
     "ff_only": "situation_finding_ff_only",
     "publish_then_ff": "situation_finding_publish_then_ff",
+    "publish_only": "situation_finding_publish_only",
     "stop_diverged": "situation_finding_stop_diverged",
     "stop_dirty_feature": "situation_finding_stop_dirty_feature",
     "none": "situation_finding_none",
@@ -73,6 +74,87 @@ def render_preflight(situation: Situation) -> str:
             continue
         lines.append(t(key, role=finding.role))
     return "\n".join(lines)
+
+
+def format_blocked_error(
+    finding: Finding, *, branch: str, upstream: str | None
+) -> str:
+    if finding.cure_id == "stop_diverged":
+        up = upstream or f"(no upstream for {branch})"
+        return t("situation_error_diverged", branch=branch, upstream=up)
+    if finding.cure_id == "stop_dirty_feature":
+        return t("situation_error_dirty_feature", branch=branch)
+    return t("situation_error_diverged", branch=branch, upstream=upstream or branch)
+
+
+def _upstream_label(sync: BranchSync | None, *, remote: str, name: str) -> str:
+    if sync is not None and sync.upstream:
+        return sync.upstream
+    return f"{remote}/{name}"
+
+
+def plan_cure_lines(situation: Situation, *, remote: str) -> tuple[str, ...]:
+    """Ordered extra plan lines for SAFE_CURE findings (ff only; publish stays in menu)."""
+    lines: list[str] = []
+    for finding, sync in zip(
+        [f for f in situation.findings if f.role == "feature"],
+        situation.features,
+    ):
+        if finding.policy != PolicyClass.SAFE_CURE:
+            continue
+        if finding.cure_id != "ff_only":
+            continue
+        lines.append(
+            t(
+                "plan_ff_feature_item",
+                branch=sync.name,
+                upstream=_upstream_label(sync, remote=remote, name=sync.name),
+            )
+        )
+
+    pipeline_ff = pipeline0_ff_line(situation, remote=remote)
+    if pipeline_ff is not None:
+        lines.append(pipeline_ff)
+    return tuple(lines)
+
+
+def feature_ff_line(
+    situation: Situation, branch: str, *, remote: str
+) -> str | None:
+    for finding, sync in zip(
+        [f for f in situation.findings if f.role == "feature"],
+        situation.features,
+    ):
+        if sync.name != branch:
+            continue
+        if (
+            finding.policy == PolicyClass.SAFE_CURE
+            and finding.cure_id == "ff_only"
+        ):
+            return t(
+                "plan_ff_feature_item",
+                branch=sync.name,
+                upstream=_upstream_label(sync, remote=remote, name=sync.name),
+            )
+        return None
+    return None
+
+
+def pipeline0_ff_line(situation: Situation, *, remote: str) -> str | None:
+    if situation.pipeline0 is None:
+        return None
+    p0 = situation.pipeline0
+    for finding in situation.findings:
+        if finding.role != "pipeline0":
+            continue
+        if finding.cure_id in {"ff_only", "publish_then_ff"}:
+            return t(
+                "plan_ff_item",
+                branch=p0.name,
+                upstream=_upstream_label(p0, remote=remote, name=p0.name),
+            )
+        return None
+    return None
 
 
 def parse_ahead_behind(text: str) -> tuple[int, int]:
@@ -157,20 +239,20 @@ def build_branch_sync(
 def classify_ref_finding(
     sync: SyncStatus, *, dirty: bool, role: str
 ) -> Finding:
-    if sync is SyncStatus.DIVERGED:
+    if sync == SyncStatus.DIVERGED:
         return Finding(PolicyClass.BLOCKED, "stop_diverged", sync, dirty, role)
-    if sync is SyncStatus.BEHIND_ONLY and not dirty:
+    if sync == SyncStatus.BEHIND_ONLY and not dirty:
         return Finding(PolicyClass.SAFE_CURE, "ff_only", sync, dirty, role)
     if role == "pipeline0" and dirty and sync in {
         SyncStatus.BEHIND_ONLY,
         SyncStatus.AHEAD_ONLY,
         SyncStatus.IN_SYNC,
     }:
-        if sync is SyncStatus.BEHIND_ONLY:
+        if sync == SyncStatus.BEHIND_ONLY:
             return Finding(PolicyClass.SAFE_CURE, "publish_then_ff", sync, dirty, role)
         return Finding(PolicyClass.SAFE_CURE, "publish_only", sync, dirty, role)
-    if role == "feature" and dirty and sync is SyncStatus.BEHIND_ONLY:
+    if role == "feature" and dirty and sync == SyncStatus.BEHIND_ONLY:
         return Finding(PolicyClass.BLOCKED, "stop_dirty_feature", sync, dirty, role)
-    if sync is SyncStatus.BEHIND_ONLY:
+    if sync == SyncStatus.BEHIND_ONLY:
         return Finding(PolicyClass.SAFE_CURE, "ff_only", sync, dirty, role)
     return Finding(PolicyClass.INFO, "none", sync, dirty, role)

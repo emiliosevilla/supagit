@@ -395,6 +395,66 @@ class MenuTests(unittest.TestCase):
         self.assertIn("feature/x", text)
         self.assertIn("dev", text)
 
+    def test_render_execution_plan_weaves_ff_after_integrate_before_promote(self) -> None:
+        import supagit_i18n
+        import supagit_situation as sit
+
+        supagit_i18n.set_lang("en")
+        selection = supagit_menu.MenuSelection(
+            integrate=("feature/x",), pipeline=("dev", "pre")
+        )
+        pipeline0 = sit.BranchSync(
+            "dev", "origin/dev", sit.SyncStatus.BEHIND_ONLY, 0, 1, False, "/repo"
+        )
+        feature = sit.BranchSync(
+            "feature/x",
+            "origin/feature/x",
+            sit.SyncStatus.BEHIND_ONLY,
+            0,
+            1,
+            False,
+            "/wt",
+        )
+        situation = sit.Situation(
+            current_branch="dev",
+            dirty=False,
+            pipeline0=pipeline0,
+            features=(feature,),
+            findings=(
+                sit.Finding(
+                    sit.PolicyClass.SAFE_CURE,
+                    "ff_only",
+                    sit.SyncStatus.BEHIND_ONLY,
+                    False,
+                    "pipeline0",
+                ),
+                sit.Finding(
+                    sit.PolicyClass.SAFE_CURE,
+                    "ff_only",
+                    sit.SyncStatus.BEHIND_ONLY,
+                    False,
+                    "feature",
+                ),
+            ),
+            gh_ready=None,
+            self_update=None,
+        )
+        text = supagit_menu.render_execution_plan(
+            selection, first_branch="dev", remote="origin", situation=situation
+        )
+        feature_ff = sit.feature_ff_line(situation, "feature/x", remote="origin")
+        pipeline_ff = sit.pipeline0_ff_line(situation, remote="origin")
+        assert feature_ff is not None and pipeline_ff is not None
+        publish_i = text.index("Publish dev")
+        feature_ff_i = text.index(feature_ff)
+        integrate_i = text.index("Integrate feature/x")
+        pipeline_ff_i = text.index(pipeline_ff)
+        promote_i = text.index("Merge dev into pre")
+        self.assertLess(publish_i, feature_ff_i)
+        self.assertLess(feature_ff_i, integrate_i)
+        self.assertLess(integrate_i, pipeline_ff_i)
+        self.assertLess(pipeline_ff_i, promote_i)
+
 
 class GhClientTests(unittest.TestCase):
     def test_ensure_ready_fails_when_gh_missing(self) -> None:
@@ -1670,6 +1730,48 @@ class OrchestrationTests(unittest.TestCase):
         self.assertFalse(explain_kwargs[0]["force_confirm"])
         plan_call = explain_kwargs[-1]
         self.assertTrue(plan_call["force_confirm"])
+
+    def test_no_sweep_run_calls_situation_preflight(self) -> None:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.branches = ("main",)
+        pipeline.dev = "main"
+        pipeline.remote = "origin"
+        pipeline.backend = ENGINE.BackendConfig(provider="none", cli=None, targets={})
+        called: list[str] = []
+
+        def mark_preflight(selection, inventory):
+            called.append("situation_preflight")
+            return None
+
+        pipeline.preflight_repo = lambda: None  # type: ignore[method-assign]
+        pipeline.build_inventory = lambda **_k: _fake_inventory()  # type: ignore[method-assign]
+        pipeline._explain_situation_preflight = mark_preflight  # type: ignore[method-assign]
+        pipeline.ensure_checkout_on_first_branch = lambda: None  # type: ignore[method-assign]
+        pipeline.validate_pipeline_head = lambda: None  # type: ignore[method-assign]
+        pipeline.ff_sync_first_branch = lambda: None  # type: ignore[method-assign]
+        pipeline.commit_and_publish_dev = lambda: None  # type: ignore[method-assign]
+        pipeline._assert_dev_synced = lambda: None  # type: ignore[method-assign]
+        pipeline.run_checks = lambda: None  # type: ignore[method-assign]
+        pipeline.validate_clean_after_checks = lambda: None  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.return_to_dev = lambda: None  # type: ignore[method-assign]
+        pipeline.optional_cleanup = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.verify_final_checkout = lambda: None  # type: ignore[method-assign]
+        pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.maybe_return_to_start_branch = lambda: None  # type: ignore[method-assign]
+        pipeline.run()
+        self.assertEqual(called, ["situation_preflight"])
 
     def test_menu_rejects_unknown_branch(self) -> None:
         with self.assertRaises(supagit_menu.MenuError) as ctx:
