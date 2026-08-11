@@ -113,6 +113,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_publish_item": "Publish {branch} to {remote}",
         "plan_ff_item": "Fast-forward {branch} to {upstream}",
         "plan_ff_feature_item": "Fast-forward {branch} to {upstream} before integrating",
+        "plan_commit_feature_item": "Commit local changes on {branch}",
         "plan_migrate_item": "Apply pending migrations to {label} ({ref})",
         "plan_promote_item": "Merge {source} into {target} and publish {target}",
         "plan_none_integrate": "No independent work branches to integrate.",
@@ -204,10 +205,18 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "error_dirty_reposition": (
             "I cannot move the checkout to {target}: {current} has uncommitted changes:\n"
             "{files}\n"
-            "Save them first (run supagit again and let it commit them on {current}), "
-            "or park them with: git stash push -u -m supagit"
+            "Commit them on {current} first (interactive: re-run supagit; "
+            "non-interactive: pass -m), or park them outside supagit with: "
+            "git stash push -u -m supagit"
         ),
         "error_dirty_reposition_more": "  … and {count} more file(s)",
+        "explain_commit_before_reposition": (
+            "This checkout is on {branch} with uncommitted changes. "
+            "I will commit them on {branch} before moving to {target}."
+        ),
+        "confirm_commit_before_reposition": (
+            "Commit all current changes on {branch} so I can move to {target}?"
+        ),
         "final_checkout_mismatch": (
             "the run finished on {actual}, not on the expected {expected}. "
             "Nothing is pending on the remote; stay here or run supagit again from {expected}."
@@ -299,6 +308,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "situation_finding_publish_only": (
             "• {role}: dirty — publish local changes first."
+        ),
+        "situation_finding_commit_feature": (
+            "• {role}: dirty — commit local changes on the feature branch first."
         ),
         "situation_finding_stop_diverged": (
             "• {role}: diverged from upstream — reconcile manually before continuing."
@@ -420,6 +432,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_publish_item": "Publicar {branch} en {remote}",
         "plan_ff_item": "Avanzar {branch} hasta {upstream} (fast-forward)",
         "plan_ff_feature_item": "Avanzar {branch} hasta {upstream} (fast-forward) antes de integrar",
+        "plan_commit_feature_item": "Confirmar cambios locales en {branch}",
         "plan_migrate_item": "Aplicar migraciones pendientes a {label} ({ref})",
         "plan_promote_item": "Fusionar {source} en {target} y publicar {target}",
         "plan_none_integrate": "No hay ramas de trabajo independientes que integrar.",
@@ -514,10 +527,18 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "error_dirty_reposition": (
             "No puedo mover el checkout a {target}: {current} tiene cambios sin guardar:\n"
             "{files}\n"
-            "Guárdalos primero (vuelve a ejecutar supagit y deja que los confirme en {current}), "
-            "o apártalos con: git stash push -u -m supagit"
+            "Confírmalos primero en {current} (interactivo: vuelve a ejecutar supagit; "
+            "no interactivo: pasa -m), o apártalos fuera de supagit con: "
+            "git stash push -u -m supagit"
         ),
         "error_dirty_reposition_more": "  … y {count} fichero(s) más",
+        "explain_commit_before_reposition": (
+            "Este checkout está en {branch} con cambios sin commit. "
+            "Los confirmaré en {branch} antes de mover a {target}."
+        ),
+        "confirm_commit_before_reposition": (
+            "¿Confirmar todos los cambios actuales en {branch} para poder mover a {target}?"
+        ),
         "final_checkout_mismatch": (
             "la ejecución terminó en {actual}, no en {expected} como se esperaba. "
             "En remoto no queda nada pendiente; quédate aquí o vuelve a ejecutar "
@@ -612,6 +633,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "situation_finding_publish_only": (
             "• {role}: sucia — publicar primero los cambios locales."
+        ),
+        "situation_finding_commit_feature": (
+            "• {role}: sucia — confirmar cambios locales en la rama feature primero."
         ),
         "situation_finding_stop_diverged": (
             "• {role}: divergió del upstream — reconcíliala manualmente antes de continuar."

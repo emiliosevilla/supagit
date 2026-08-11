@@ -47,6 +47,8 @@ class BuildBranchSyncTests(unittest.TestCase):
             cmd = list(args)
             if cmd[:2] == ["rev-parse", "--verify"]:
                 return "abc\n"
+            if cmd[:2] == ["branch", "--show-current"]:
+                return "feature\n"
             if cmd[0] == "status":
                 return ""
             if cmd[:2] == ["rev-parse", "--abbrev-ref"]:
@@ -64,6 +66,67 @@ class BuildBranchSyncTests(unittest.TestCase):
         self.assertFalse(sync.dirty)
         self.assertEqual(sync.upstream, "origin/feature")
         self.assertEqual(finding.cure_id, "ff_only")
+
+    def test_pipeline0_ignores_dirty_when_other_branch_checked_out(self) -> None:
+        def git(*args, **kwargs):
+            cmd = list(args)
+            if cmd[:2] == ["rev-parse", "--verify"]:
+                return "abc\n"
+            if cmd[:2] == ["branch", "--show-current"]:
+                return "work\n"
+            if cmd[0] == "status":
+                return " M README.md\n"
+            if cmd[:2] == ["rev-parse", "--abbrev-ref"]:
+                return "origin/main\n"
+            if cmd[:3] == ["rev-list", "--left-right", "--count"]:
+                return "0\t0\n"
+            raise AssertionError(cmd)
+
+        sync, finding = SIT.build_branch_sync(
+            git, "main", remote="origin", role="pipeline0", worktree_path="/repo"
+        )
+        self.assertFalse(sync.dirty)
+        self.assertEqual(finding.cure_id, "none")
+
+    def test_feature_dirty_when_checked_out(self) -> None:
+        def git(*args, **kwargs):
+            cmd = list(args)
+            if cmd[:2] == ["rev-parse", "--verify"]:
+                return "abc\n"
+            if cmd[:2] == ["branch", "--show-current"]:
+                return "work\n"
+            if cmd[0] == "status":
+                return " M README.md\n"
+            if cmd[:2] == ["rev-parse", "--abbrev-ref"]:
+                return "origin/work\n"
+            if cmd[:3] == ["rev-list", "--left-right", "--count"]:
+                return "0\t0\n"
+            raise AssertionError(cmd)
+
+        sync, finding = SIT.build_branch_sync(
+            git, "work", remote="origin", role="feature", worktree_path="/repo"
+        )
+        self.assertTrue(sync.dirty)
+        self.assertEqual(finding.cure_id, "commit_feature")
+
+    def test_no_worktree_never_dirty(self) -> None:
+        def git(*args, **kwargs):
+            cmd = list(args)
+            if cmd[:2] == ["rev-parse", "--verify"]:
+                return "abc\n"
+            if cmd[0] == "status":
+                raise AssertionError("status must not run without a worktree")
+            if cmd[:2] == ["rev-parse", "--abbrev-ref"]:
+                return "origin/main\n"
+            if cmd[:3] == ["rev-list", "--left-right", "--count"]:
+                return "0\t0\n"
+            raise AssertionError(cmd)
+
+        sync, finding = SIT.build_branch_sync(
+            git, "main", remote="origin", role="pipeline0", worktree_path=None
+        )
+        self.assertFalse(sync.dirty)
+        self.assertEqual(finding.cure_id, "none")
 
     def test_missing_branch_raises(self) -> None:
         def git(*args, **kwargs):
@@ -216,6 +279,11 @@ class PolicyTests(unittest.TestCase):
         f = SIT.classify_ref_finding(SIT.SyncStatus.BEHIND_ONLY, dirty=True, role="feature")
         self.assertEqual(f.policy, SIT.PolicyClass.BLOCKED)
         self.assertEqual(f.cure_id, "stop_dirty_feature")
+
+    def test_feature_dirty_in_sync_commit(self) -> None:
+        f = SIT.classify_ref_finding(SIT.SyncStatus.IN_SYNC, dirty=True, role="feature")
+        self.assertEqual(f.policy, SIT.PolicyClass.SAFE_CURE)
+        self.assertEqual(f.cure_id, "commit_feature")
 
 
 if __name__ == "__main__":
