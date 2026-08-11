@@ -85,10 +85,11 @@ worktree (or by updating the ref without checking the feature out onto
 `pipeline[0]`) before `gh pr create`. Empty `base..head` ranges fail before
 create.
 
-After plan Confirm, phases run in this order: ensure checkout on
-`pipeline[0]` → **publish** local changes on first (clean behind defers to ff)
-→ integrate features → **ff_sync** first (refused while dirty; never
-`reset --hard` on a dirty tree) → checks / migrate / promote / cleanup.
+After plan Confirm, phases run in this order: **commit dirty work on the
+current feature if needed** → ensure checkout on `pipeline[0]` → **publish**
+local changes on first (clean behind defers to ff) → integrate features →
+**ff_sync** first (refused while dirty; never `reset --hard` on a dirty tree)
+→ checks / migrate / promote / cleanup.
 
 ## Promotion phase
 
@@ -158,7 +159,5 @@ the pipeline fails or stops partway through execution.
 Error output emitted by a failed child command is also rendered in red, line by
 line, before the final error summary.
 
-Wave-1 Situation resilience (Git + self-update) is documented in
-`docs/superpowers/specs/2026-08-11-supagit-situation-resilience-design.md`.
 Supabase recovery hardening remains deferred:
 `docs/superpowers/backlog/2026-08-11-supabase-hardening.md`.

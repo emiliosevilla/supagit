@@ -60,6 +60,7 @@ _FINDING_I18N: dict[str, str] = {
     "ff_only": "situation_finding_ff_only",
     "publish_then_ff": "situation_finding_publish_then_ff",
     "publish_only": "situation_finding_publish_only",
+    "commit_feature": "situation_finding_commit_feature",
     "stop_diverged": "situation_finding_stop_diverged",
     "stop_dirty_feature": "situation_finding_stop_dirty_feature",
     "none": "situation_finding_none",
@@ -102,6 +103,9 @@ def plan_cure_lines(situation: Situation, *, remote: str) -> tuple[str, ...]:
     ):
         if finding.policy != PolicyClass.SAFE_CURE:
             continue
+        if finding.cure_id == "commit_feature":
+            lines.append(t("plan_commit_feature_item", branch=sync.name))
+            continue
         if finding.cure_id != "ff_only":
             continue
         lines.append(
@@ -136,6 +140,22 @@ def feature_ff_line(
                 branch=sync.name,
                 upstream=_upstream_label(sync, remote=remote, name=sync.name),
             )
+        return None
+    return None
+
+
+def feature_commit_line(situation: Situation, branch: str) -> str | None:
+    for finding, sync in zip(
+        [f for f in situation.findings if f.role == "feature"],
+        situation.features,
+    ):
+        if sync.name != branch:
+            continue
+        if (
+            finding.policy == PolicyClass.SAFE_CURE
+            and finding.cure_id == "commit_feature"
+        ):
+            return t("plan_commit_feature_item", branch=sync.name)
         return None
     return None
 
@@ -179,6 +199,27 @@ def classify_sync_counts(ahead: int, behind: int) -> SyncStatus:
     return SyncStatus.IN_SYNC
 
 
+def worktree_dirty_for_branch(
+    git, name: str, worktree_path: str | None
+) -> bool:
+    """Dirty only counts when this branch is the worktree HEAD.
+
+    Measuring ``status --porcelain`` in a shared main checkout while another
+    branch is checked out must not attribute that dirtiness to pipeline[0].
+    A branch with no worktree cannot own working-tree dirtiness.
+    """
+    if worktree_path is None:
+        return False
+    status_kwargs: dict = {"cwd": worktree_path}
+    try:
+        current = git("branch", "--show-current", **status_kwargs).strip()
+    except Exception:
+        return False
+    if current != name:
+        return False
+    return bool(git("status", "--porcelain", **status_kwargs).strip())
+
+
 def build_branch_sync(
     git,
     name: str,
@@ -192,10 +233,7 @@ def build_branch_sync(
     except Exception as exc:
         raise SituationError(f"Branch not found: {name}") from exc
 
-    status_kwargs: dict = {}
-    if worktree_path is not None:
-        status_kwargs["cwd"] = worktree_path
-    dirty = bool(git("status", "--porcelain", **status_kwargs).strip())
+    dirty = worktree_dirty_for_branch(git, name, worktree_path)
 
     try:
         upstream = git("rev-parse", "--abbrev-ref", f"{name}@{{upstream}}").strip()
@@ -253,6 +291,8 @@ def classify_ref_finding(
         return Finding(PolicyClass.SAFE_CURE, "publish_only", sync, dirty, role)
     if role == "feature" and dirty and sync == SyncStatus.BEHIND_ONLY:
         return Finding(PolicyClass.BLOCKED, "stop_dirty_feature", sync, dirty, role)
+    if role == "feature" and dirty:
+        return Finding(PolicyClass.SAFE_CURE, "commit_feature", sync, dirty, role)
     if sync == SyncStatus.BEHIND_ONLY:
         return Finding(PolicyClass.SAFE_CURE, "ff_only", sync, dirty, role)
     return Finding(PolicyClass.INFO, "none", sync, dirty, role)

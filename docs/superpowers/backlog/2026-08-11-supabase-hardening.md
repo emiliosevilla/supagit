@@ -1,7 +1,7 @@
 # Backlog: Supabase hardening (deferred)
 
 **Status:** deferred — not part of wave-1 Situation resilience (Git + self-update).  
-**Spec pointer:** `docs/superpowers/specs/2026-08-11-supagit-situation-resilience-design.md` (boundaries: *Ask first* for Supabase recovery).
+**Policy:** ask before implementing Supabase recovery UX.
 
 ## Why deferred
 

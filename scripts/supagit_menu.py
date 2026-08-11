@@ -11,7 +11,12 @@ from supagit_inventory import (
     independent_work_branches,
 )
 from supagit_i18n import t
-from supagit_situation import Situation, feature_ff_line, pipeline0_ff_line
+from supagit_situation import (
+    Situation,
+    feature_commit_line,
+    feature_ff_line,
+    pipeline0_ff_line,
+)
 
 
 class MenuError(RuntimeError):
@@ -267,6 +272,9 @@ def render_execution_plan(
     if selection.integrate:
         for branch in selection.integrate:
             if situation is not None:
+                feature_commit = feature_commit_line(situation, branch)
+                if feature_commit:
+                    lines.append(feature_commit)
                 feature_ff = feature_ff_line(situation, branch, remote=remote_name)
                 if feature_ff:
                     lines.append(feature_ff)

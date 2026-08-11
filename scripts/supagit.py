@@ -905,16 +905,17 @@ class Pipeline:
                 + ". Remove them from the commit and run the pipeline again."
             )
 
-    def _commit_message(self) -> str:
+    def _commit_message(self, *, branch: str | None = None) -> str:
+        label = branch or self.dev
         if self.options.message and self.options.message.strip():
             return self.options.message.strip()
         if self.options.dry_run:
             return "<commit-message-required>"
         if self.options.yes:
-            raise ShipError(t("commit_message_yes", branch=self.dev))
+            raise ShipError(t("commit_message_yes", branch=label))
         message = self.tutor_prompt(
             t("explain_commit_message"),
-            t("commit_message_prompt", branch=self.dev),
+            t("commit_message_prompt", branch=label),
         )
         if not message:
             raise ShipError(t("commit_message_empty"))
@@ -1379,10 +1380,13 @@ class Pipeline:
 
         first = selection.pipeline[0]
         first_info = by_name.get(first)
+        # Only measure dirty on pipeline0 when that branch is checked out in a
+        # worktree. Falling back to self.root while another branch is checked
+        # out there falsely attributes feature dirtiness to pipeline0.
         first_wt = (
             str(first_info.worktree_path)
             if first_info is not None and first_info.worktree_path is not None
-            else str(self.root)
+            else None
         )
         try:
             pipeline0, finding0 = supagit_situation.build_branch_sync(
@@ -1545,14 +1549,29 @@ class Pipeline:
 
         status = self.git("status", "--porcelain", capture=True, cwd=self.root)
         if status.strip():
-            raise ShipError(
-                t(
-                    "error_dirty_reposition",
-                    current=current_label,
-                    target=self.dev,
-                    files=self._format_dirty_paths(status),
+            if current == "":
+                raise ShipError(
+                    t(
+                        "error_dirty_reposition",
+                        current=current_label,
+                        target=self.dev,
+                        files=self._format_dirty_paths(status),
+                    )
                 )
-            )
+            self._commit_dirty_before_reposition(current, status)
+            if not self.options.dry_run:
+                status = self.git(
+                    "status", "--porcelain", capture=True, cwd=self.root
+                )
+                if status.strip():
+                    raise ShipError(
+                        t(
+                            "error_dirty_reposition",
+                            current=current_label,
+                            target=self.dev,
+                            files=self._format_dirty_paths(status),
+                        )
+                    )
 
         self._ensure_first_branch_ref()
         self.tutor_confirm(
@@ -1560,6 +1579,34 @@ class Pipeline:
             t("confirm_reposition", current=current_label, target=self.dev),
         )
         self.git("checkout", self.dev, mutating=True, cwd=self.root)
+
+    def _commit_dirty_before_reposition(self, branch: str, status: str) -> None:
+        """Save uncommitted work on the current feature before moving to pipeline[0]."""
+        status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
+        self._reject_sensitive_paths(status_paths)
+        message = self._commit_message(branch=branch)
+        self.tutor_confirm(
+            t(
+                "explain_commit_before_reposition",
+                branch=branch,
+                target=self.dev,
+            ),
+            t(
+                "confirm_commit_before_reposition",
+                branch=branch,
+                target=self.dev,
+            ),
+        )
+        try:
+            supagit_sweep.commit_dirty_tree(
+                self._sweep_git,
+                cwd=self.root,
+                message=message,
+                reject_sensitive=self._reject_sensitive_paths,
+                dry_run=self.options.dry_run,
+            )
+        except supagit_sweep.SweepError as exc:
+            raise ShipError(str(exc)) from exc
 
     def verify_final_checkout(self) -> None:
         # Dry-run never repositions; comparing live checkout would false-alarm.

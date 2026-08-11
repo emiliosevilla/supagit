@@ -1222,13 +1222,14 @@ class OrchestrationTests(unittest.TestCase):
         verify_refs: set[str] | None = None,
         contains: str = "feature/x\n",
         short_sha: str = "abc1234",
+        message: str | None = "save work",
     ) -> tuple[ENGINE.Pipeline, list[tuple], list[str]]:
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
         pipeline.options = ENGINE.Options(
             dry_run=dry_run,
             yes=yes,
             config_path=None,
-            message=None,
+            message=message,
             color="never",
             no_sweep=True,
             integrate=None,
@@ -1258,13 +1259,14 @@ class OrchestrationTests(unittest.TestCase):
         porcelain = worktree_porcelain or (
             "worktree /repo\nbranch refs/heads/feature/x\n"
         )
+        dirty_state = {"value": dirty}
 
         def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
             calls.append(args)
             if args[:2] == ("branch", "--show-current"):
                 return f"{current}\n"
             if args[:2] == ("status", "--porcelain"):
-                return dirty
+                return dirty_state["value"]
             if args[:2] == ("worktree", "list"):
                 return porcelain
             if args[:2] == ("rev-parse", "--verify"):
@@ -1280,11 +1282,22 @@ class OrchestrationTests(unittest.TestCase):
                 return ""
             if args[0] == "checkout":
                 return ""
+            if args[0] == "add":
+                return ""
+            if args[0] == "commit":
+                dirty_state["value"] = ""
+                return ""
+            if args[:2] == ("diff", "--cached"):
+                return "a.txt\n" if args[-1] == "--name-only" else ""
             if args[:2] == ("remote", "get-url"):
                 return "git@github.com:acme/demo.git\n"
             raise AssertionError(f"unexpected git call: {args}")
 
         pipeline.git = git  # type: ignore[method-assign]
+        pipeline._sweep_git = (  # type: ignore[method-assign]
+            lambda *a, cwd=None, capture=True: git(*a, capture=capture, cwd=cwd)
+        )
+        pipeline._reject_sensitive_paths = lambda paths: None  # type: ignore[method-assign]
 
         def capture_explain(
             message: str, *, ask_continue: bool = True, force_confirm: bool = False
@@ -1292,7 +1305,7 @@ class OrchestrationTests(unittest.TestCase):
             explained.append(message)
 
         pipeline.explain = capture_explain  # type: ignore[method-assign]
-        pipeline.confirm = lambda message: None  # type: ignore[method-assign]
+        pipeline.confirm = lambda message, force=False: None  # type: ignore[method-assign]
         return pipeline, calls, explained
 
     def test_preflight_non_linked_wrong_branch_ok(self) -> None:
@@ -1326,19 +1339,15 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(any("main" in e and "feature/x" in e for e in explained))
         self.assertIn(("checkout", "main"), calls)
 
-    def test_ensure_checkout_dirty_wrong_branch_fails(self) -> None:
+    def test_ensure_checkout_dirty_wrong_branch_commits_then_moves(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(
             current="feature/x",
             dirty=" M a.txt\n?? b.txt\n",
         )
-        with self.assertRaises(ENGINE.ShipError) as ctx:
-            pipeline.ensure_checkout_on_first_branch()
-        text = str(ctx.exception)
-        self.assertIn("main", text)
-        self.assertIn("feature/x", text)
-        self.assertIn("a.txt", text)
-        self.assertIn("git stash", text)
-        self.assertFalse(any(c[0] == "checkout" for c in calls))
+        pipeline.ensure_checkout_on_first_branch()
+        self.assertTrue(any(c[0] == "add" for c in calls))
+        self.assertTrue(any(c[0] == "commit" for c in calls))
+        self.assertIn(("checkout", "main"), calls)
 
     def test_ensure_checkout_dirty_on_first_branch_ok(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(
@@ -1365,13 +1374,27 @@ class OrchestrationTests(unittest.TestCase):
             builtins.input = original  # type: ignore[assignment]
         self.assertIn(("checkout", "main"), calls)
 
-    def test_ensure_checkout_yes_dirty_fails(self) -> None:
+    def test_ensure_checkout_yes_dirty_commits_with_message(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(
-            current="feature/x", yes=True, dirty=" M a.txt\n?? b.txt\n"
+            current="feature/x",
+            yes=True,
+            dirty=" M a.txt\n?? b.txt\n",
+            message="save work",
+        )
+        pipeline.ensure_checkout_on_first_branch()
+        self.assertTrue(any(c[0] == "commit" for c in calls))
+        self.assertIn(("checkout", "main"), calls)
+
+    def test_ensure_checkout_yes_dirty_requires_message(self) -> None:
+        pipeline, calls, _ = self._pipeline_for_reposition(
+            current="feature/x",
+            yes=True,
+            dirty=" M a.txt\n?? b.txt\n",
+            message=None,
         )
         with self.assertRaises(ENGINE.ShipError) as ctx:
             pipeline.ensure_checkout_on_first_branch()
-        self.assertIn("git stash", str(ctx.exception))
+        self.assertIn("--message", str(ctx.exception))
         self.assertFalse(any(c[0] == "checkout" for c in calls))
 
     def test_ensure_checkout_dry_run_clean(self) -> None:
@@ -1392,14 +1415,12 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(any("main" in e and "feature/x" in e for e in explained))
         self.assertIn(("checkout", "main"), calls)
 
-    def test_ensure_checkout_dry_run_dirty_fails(self) -> None:
+    def test_ensure_checkout_dry_run_dirty_ok(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(
             current="feature/x", dry_run=True, dirty=" M a.txt\n"
         )
-        with self.assertRaises(ENGINE.ShipError) as ctx:
-            pipeline.ensure_checkout_on_first_branch()
-        self.assertIn("git stash", str(ctx.exception))
-        self.assertFalse(any(c[0] == "checkout" for c in calls))
+        pipeline.ensure_checkout_on_first_branch()
+        self.assertIn(("checkout", "main"), calls)
 
     def test_ensure_checkout_fetches_missing_ref(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(

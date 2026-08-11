@@ -1,11 +1,16 @@
 # supagit
 
-`supagit` is a fail-closed promotion pipeline for projects that publish code through an ordered sequence of Git branches. These projects may, or may not, have a backend consisting on Supabase environments. 
+`supagit` is a fail-closed promotion pipeline for projects that publish code
+through an ordered sequence of Git branches. A Supabase backend is optional.
 
-The bash command, installer, and tests live in [`scripts/`](scripts/).
-The project configuration template is [`.supagit.json.example`](.supagit.json.example), and
-the agent-specific skill operating instructions are in
-[`docs/supagit-agent-command.md`](docs/supagit-agent-command.md).
+The CLI, installer, and tests live in [`scripts/`](scripts/). Project config
+template: [`.supagit.json.example`](.supagit.json.example).
+
+| Doc | Purpose |
+|-----|---------|
+| [`docs/supagit-agent-command.md`](docs/supagit-agent-command.md) | Agent skill / how to run `supagit` safely |
+| [`tasks/task.md`](tasks/task.md) | Open and recently finished work |
+| [`docs/superpowers/backlog/2026-08-11-supabase-hardening.md`](docs/superpowers/backlog/2026-08-11-supabase-hardening.md) | Deferred Supabase recovery backlog |
 
 ## Installation
 
@@ -154,18 +159,22 @@ shell (zsh treats `<…>` as file redirection and fails).
 
 You may run from the main repository or from a linked worktree, and from
 **any** branch (feature, pipeline, or a detached HEAD with a reachable
-commit) as long as the working tree is clean when a move is required. When
-launched from a linked worktree, promotion uses the main checkout; the launch
-path is printed at startup.
+commit). When a move to the first pipeline branch is required, uncommitted
+changes on a named feature branch are committed there first; a dirty detached
+HEAD still fails closed. When launched from a linked worktree, promotion uses
+the main checkout; the launch path is printed at startup.
 
 At startup, `supagit` tells you which branch you are on and that you should
-not change it yourself. After the sweeper menu confirms the plan, it explains
-(cyan) that it must move the checkout to the first pipeline branch and asks
-(green) before doing so. A dirty tree that requires that move stops the run
-with an actionable message — it never stashes, force-checks out, or discards
-your work. If you are already on the first pipeline branch with local
-changes, those are committed and published as usual. When the release
-finishes, interactive runs offer to return you to the branch you started on.
+not change it yourself. After the sweeper menu and Situation preflight, the
+cyan execution plan is confirmed (green). Then, if the checkout is on another
+branch with uncommitted changes, those changes are committed on that branch
+first (message prompt, or `-m` with `--yes`). After that it moves the checkout
+to the first pipeline branch when needed (cyan explain + green confirm). A
+dirty detached HEAD, or a commit blocked by secrets, still stops the run with
+an actionable message — it never stashes, force-checks out, or discards your
+work. Local changes already on the first pipeline branch are published in the
+publish phase. When the release finishes, interactive runs offer to return you
+to the branch you started on.
 
 Always inspect the plan first:
 
@@ -221,13 +230,15 @@ Empty `base..head` ranges are refused before `gh pr create`.
 
 Phase order after plan Confirm:
 
-1. Ensure checkout on the first pipeline branch.
-2. **Publish** local changes on that branch (commit/push when needed). A clean
+1. If the current branch is not the first pipeline branch and has uncommitted
+   changes, **commit** them on that branch (then the tree is clean enough to move).
+2. Ensure checkout on the first pipeline branch.
+3. **Publish** local changes on that branch (commit/push when needed). A clean
    tree that is only behind defers sync to the ff step.
-3. **Integrate** selected features (with feature ff when behind-only).
-4. **Fast-forward** the first pipeline branch to its remote (ff-only; refused
+4. **Integrate** selected features (with feature ff when behind-only).
+5. **Fast-forward** the first pipeline branch to its remote (ff-only; refused
    while the worktree is dirty; never `reset --hard` on a dirty tree).
-5. Checks, optional migrations, promote adjacent pairs, optional cleanup.
+6. Checks, optional migrations, promote adjacent pairs, optional cleanup.
 
 ### Promotion
 
@@ -257,7 +268,7 @@ by itself change the mode (only branch rules do).
 | `--dry-run` | Preview the plan without mutating Git or Supabase. Skips routine Continue? gates; still confirms at the execution plan. |
 | `--lang en\|es` | UI language (skips the language menu). Also `SUPAGIT_LANG`. Required with `--yes` / non-TTY. |
 | `--backend` | Backend for `init` or auto-init when `.supagit.json` is missing (`none` / `supabase`). |
-| `--no-sweep` | Skip menu and feature integration; still runs Situation preflight for the first pipeline branch, explains and relocates the checkout when needed (fail-closed if dirty), publishes when appropriate, and ff-only syncs that branch. |
+| `--no-sweep` | Skip menu and feature integration; still runs Situation preflight for the first pipeline branch, commits dirty work on the current feature when a move is needed, explains and relocates the checkout, publishes when appropriate, and ff-only syncs that branch. |
 | `--integrate` | Comma-separated feature branches, or `none` (non-interactive). |
 | `--pipeline` | Comma-separated ordered pipeline branches (non-interactive). |
 | `--yes` | Skip confirmations; requires `--integrate` and `--pipeline` unless `--no-sweep`. |
@@ -278,7 +289,8 @@ integration uses GitHub merge commits via `gh` and requires `gh` to be available
 
 ## Output and safety
 
-- **Cyan** — tutor explanations, menu context, execution plans, and welcome banner.
+- **Cyan** — tutor explanations, menu context, Situation preflight, execution
+  plans, and welcome banner.
 - **Green** — where you type: confirmation prompts, commit messages, sweeper
   answers, and the busy spinner.
 - Successful completion is green.
@@ -298,6 +310,6 @@ integration uses GitHub merge commits via `gh` and requires `gh` to be available
 - Agents must measure layout, worktrees, and status; run `--dry-run` first; and
   obtain explicit confirmation before a mutating run. See
   [`docs/supagit-agent-command.md`](docs/supagit-agent-command.md).
-- Supabase **recovery** UX (ambiguous refs, migrate failure diagnosis, credential
-  repair) is intentionally deferred; see
-  [`docs/superpowers/backlog/2026-08-11-supabase-hardening.md`](docs/superpowers/backlog/2026-08-11-supabase-hardening.md).
+- Open product backlog (Supabase recovery UX) lives under
+  [`docs/superpowers/backlog/`](docs/superpowers/backlog/); track status in
+  [`tasks/task.md`](tasks/task.md).
