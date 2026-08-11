@@ -1660,6 +1660,7 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.explain = capture_explain  # type: ignore[method-assign]
         pipeline.tutor_prompt = lambda explanation, prompt: ""  # type: ignore[method-assign]
         pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
 
         selection = pipeline.run_branch_menu(_fake_inventory())
         self.assertEqual(selection.pipeline, ("dev", "pre", "prod"))

@@ -806,6 +806,62 @@ class CheckoutFlexTests(unittest.TestCase):
             MODULE.supagit_menu.parse_integrate_line(inv, "old")
         self.assertIn("pre", str(ctx.exception))
 
+    def test_run_branch_menu_explains_situation_preflight(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=False,
+            integrate="none",
+            pipeline_order="dev",
+        )
+        pipeline.branches = ("dev",)
+        pipeline.remote = "origin"
+        pipeline.root = Path("/repo")
+        pipeline.original_branch = "dev"
+        explained: list[str] = []
+
+        def explain(message: str, *, ask_continue: bool = True, force_confirm: bool = False) -> None:
+            explained.append(message)
+
+        inv = MODULE.supagit_inventory.RepoInventory(
+            MODULE.supagit_layout.RepoLayout(
+                Path("/repo"), Path("/repo"), Path("/repo/.git"), False
+            ),
+            (),
+            (
+                MODULE.supagit_inventory.BranchInfo(
+                    "dev", True, True, Path("/repo"), 0, 0, True, "origin/dev", False
+                ),
+            ),
+            "dev",
+        )
+
+        def situation_git(*args, **kwargs):
+            cmd = list(args)
+            if cmd[:2] == ["rev-parse", "--verify"]:
+                return "abc\n"
+            if cmd[0] == "status":
+                return ""
+            if cmd[:2] == ["rev-parse", "--abbrev-ref"]:
+                return "origin/dev\n"
+            if cmd[:3] == ["rev-list", "--left-right", "--count"]:
+                return "0\t0\n"
+            raise AssertionError(cmd)
+
+        pipeline.explain = explain  # type: ignore[method-assign]
+        pipeline._situation_git = situation_git  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        selection = pipeline.run_branch_menu(inv)
+        self.assertEqual(selection.pipeline, ("dev",))
+        self.assertTrue(any("situation" in e.lower() or "pipeline" in e.lower() for e in explained))
+        self.assertTrue(
+            any("Before running the pipeline" in e or "situation" in e.lower() for e in explained)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
