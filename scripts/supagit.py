@@ -26,12 +26,14 @@ import supagit_i18n
 import supagit_inventory
 import supagit_layout
 import supagit_menu
+import supagit_situation
 import supagit_sweep
 import supagit_update
 from supagit_busy import BusySpinner, print_welcome
 from supagit_i18n import t
 from supagit_inventory import RepoInventory
 from supagit_menu import MenuSelection
+from supagit_situation import Situation
 
 GREEN = "\033[32m"
 RED = "\033[31m"
@@ -1270,6 +1272,7 @@ class Pipeline:
                 selection = self._resolve_selection(
                     inventory, pipeline, integrate, default_pipeline=()
                 )
+                self._explain_situation_preflight(selection, inventory)
             else:
                 current = self.original_branch or None
                 # Menu is context for the integrate/pipeline prompts; those green
@@ -1296,6 +1299,7 @@ class Pipeline:
                     default_pipeline=self.branches,
                     interactive=True,
                 )
+                self._explain_situation_preflight(selection, inventory)
                 self.explain(
                     supagit_menu.render_execution_plan(
                         selection,
@@ -1311,6 +1315,81 @@ class Pipeline:
             raise ShipError(str(exc)) from exc
 
         return selection
+
+    def _situation_git(self, *args, **kwargs) -> str:
+        cwd = kwargs.get("cwd")
+        return self.git(
+            *args,
+            capture=True,
+            cwd=Path(cwd) if cwd is not None else self.root,
+        )
+
+    def build_situation_for_selection(
+        self, selection: MenuSelection, inventory: RepoInventory
+    ) -> Situation:
+        by_name = {branch.name: branch for branch in inventory.branches}
+        findings: list[supagit_situation.Finding] = []
+        feature_syncs: list[supagit_situation.BranchSync] = []
+
+        first = selection.pipeline[0]
+        first_info = by_name.get(first)
+        first_wt = (
+            str(first_info.worktree_path)
+            if first_info is not None and first_info.worktree_path is not None
+            else str(self.root)
+        )
+        try:
+            pipeline0, finding0 = supagit_situation.build_branch_sync(
+                self._situation_git,
+                first,
+                remote=self.remote,
+                role="pipeline0",
+                worktree_path=first_wt,
+            )
+        except supagit_situation.SituationError as exc:
+            raise ShipError(str(exc)) from exc
+        findings.append(finding0)
+
+        for name in selection.integrate:
+            info = by_name.get(name)
+            wt = (
+                str(info.worktree_path)
+                if info is not None and info.worktree_path is not None
+                else None
+            )
+            try:
+                sync, finding = supagit_situation.build_branch_sync(
+                    self._situation_git,
+                    name,
+                    remote=self.remote,
+                    role="feature",
+                    worktree_path=wt,
+                )
+            except supagit_situation.SituationError as exc:
+                raise ShipError(str(exc)) from exc
+            feature_syncs.append(sync)
+            findings.append(finding)
+
+        current = (self.original_branch or "").strip() or first
+        dirty = any(f.dirty for f in findings) or pipeline0.dirty
+        return Situation(
+            current_branch=current,
+            dirty=dirty,
+            pipeline0=pipeline0,
+            features=tuple(feature_syncs),
+            findings=tuple(findings),
+            gh_ready=None,
+            self_update=None,
+        )
+
+    def _explain_situation_preflight(
+        self, selection: MenuSelection, inventory: RepoInventory
+    ) -> None:
+        situation = self.build_situation_for_selection(selection, inventory)
+        self.explain(
+            supagit_situation.render_preflight(situation),
+            ask_continue=False,
+        )
 
     def apply_menu_selection(self, selection: MenuSelection) -> None:
         self.branches = tuple(selection.pipeline)

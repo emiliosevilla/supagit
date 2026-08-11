@@ -260,6 +260,20 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "for example: git switch -c rescue-work"
         ),
         "layout_unsupported": "Unsupported repository layout: {detail}",
+        "situation_preflight_header": "Before running the pipeline, here is the repository situation:",
+        "situation_finding_ff_only": (
+            "• {role}: behind upstream — a fast-forward sync will run."
+        ),
+        "situation_finding_publish_then_ff": (
+            "• {role}: dirty and behind upstream — publish first, then fast-forward."
+        ),
+        "situation_finding_stop_diverged": (
+            "• {role}: diverged from upstream — reconcile manually before continuing."
+        ),
+        "situation_finding_stop_dirty_feature": (
+            "• {role}: dirty feature branch behind upstream — commit changes on the feature branch first."
+        ),
+        "situation_finding_none": "• {role}: no sync action needed.",
     },
     "es": {
         "lang_menu": "Language / Idioma:\n  (1) English\n  (2) Español\nOpción [1/2]: ",
@@ -515,6 +529,20 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "por ejemplo: git switch -c rescue-work"
         ),
         "layout_unsupported": "Estructura de repositorio no soportada: {detail}",
+        "situation_preflight_header": "Antes de ejecutar el pipeline, esta es la situación del repositorio:",
+        "situation_finding_ff_only": (
+            "• {role}: por detrás del upstream — se hará un fast-forward."
+        ),
+        "situation_finding_publish_then_ff": (
+            "• {role}: sucia y por detrás del upstream — publicar primero y luego fast-forward."
+        ),
+        "situation_finding_stop_diverged": (
+            "• {role}: divergió del upstream — reconcíliala manualmente antes de continuar."
+        ),
+        "situation_finding_stop_dirty_feature": (
+            "• {role}: rama de trabajo sucia y por detrás del upstream — confirma los cambios en la rama primero."
+        ),
+        "situation_finding_none": "• {role}: no hace falta ninguna acción de sincronización.",
     },
 }
 
