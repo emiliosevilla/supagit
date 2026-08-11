@@ -268,6 +268,8 @@ class FfSyncTests(unittest.TestCase):
 
         def run_git(*args: str, cwd=None, capture: bool = True) -> str:
             calls.append(tuple(args))
+            if args[:2] == ("branch", "--show-current"):
+                return "dev\n"
             if args[:2] == ("status", "--porcelain"):
                 return ""
             if args[:2] == ("fetch", "origin"):
@@ -283,8 +285,8 @@ class FfSyncTests(unittest.TestCase):
         with self.assertRaises(supagit_sweep.SweepError) as ctx:
             supagit_sweep.ff_sync_branch(run_git, "dev", "origin", dry_run=False)
         self.assertIn("Could not fetch origin/dev", str(ctx.exception))
-        self.assertEqual(calls[0][:2], ("status", "--porcelain"))
-        self.assertEqual(calls[1][:2], ("fetch", "origin"))
+        self.assertEqual(calls[0][:2], ("branch", "--show-current"))
+        self.assertIn(("fetch", "origin", "refs/heads/dev:refs/remotes/origin/dev"), calls)
         self.assertIn(("remote", "get-url", "origin"), calls)
 
     def test_ff_refuses_dirty_worktree(self) -> None:
@@ -295,6 +297,8 @@ class FfSyncTests(unittest.TestCase):
 
         def run_git(*args: str, cwd=None, capture: bool = True) -> str:
             calls.append(tuple(args))
+            if args[:2] == ("branch", "--show-current"):
+                return "dev\n"
             if args[:2] == ("status", "--porcelain"):
                 return " M README.md\n"
             raise AssertionError(f"unexpected git call: {args}")
@@ -307,6 +311,40 @@ class FfSyncTests(unittest.TestCase):
         self.assertFalse(any(c[0] == "fetch" for c in calls))
         self.assertFalse(any(c[0] == "merge" for c in calls))
         self.assertFalse(any(c[:2] == ("reset", "--hard") for c in calls))
+
+    def test_ff_update_ref_when_not_checked_out(self) -> None:
+        calls: list[tuple[str, ...]] = []
+        tips = {"feature/x": "aaa", "origin/feature/x": "bbb"}
+
+        def run_git(*args: str, cwd=None, capture: bool = True) -> str:
+            calls.append(tuple(args))
+            if cwd != Path("/repo"):
+                raise AssertionError(f"expected cwd=/repo got {cwd!r}")
+            if args[:2] == ("branch", "--show-current"):
+                return "main\n"
+            if args[:2] == ("fetch", "origin"):
+                return ""
+            if args[0] == "rev-parse" and args[-1] in tips:
+                return tips[args[-1]]
+            if args[:3] == ("rev-list", "--left-right", "--count"):
+                return "1\t0"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
+            if args[0] == "update-ref":
+                tips["feature/x"] = tips[args[2]]
+                return ""
+            raise AssertionError(f"unexpected git call: {args}")
+
+        result = supagit_sweep.ff_sync_branch(
+            run_git, "feature/x", "origin", dry_run=False, cwd=Path("/repo")
+        )
+        self.assertTrue(result.changed)
+        self.assertEqual(tips["feature/x"], "bbb")
+        self.assertFalse(any(c[0] == "checkout" for c in calls))
+        self.assertFalse(any(c[0] == "merge" for c in calls))
+        self.assertTrue(
+            any(c[:2] == ("update-ref", "refs/heads/feature/x") for c in calls)
+        )
 
     def test_ahead_behind_rejects_empty_output(self) -> None:
         def run_git(*args: str, cwd=None, capture: bool = True) -> str:
@@ -710,10 +748,18 @@ class IntegrateBranchTests(unittest.TestCase):
             actions.append("git:" + " ".join(args))
             if args[:2] == ("status", "--porcelain"):
                 return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "feature/x\n"
+            if args[:3] == ("rev-list", "--left-right", "--count"):
+                return "0\t0"
+            if args[0] == "rev-parse":
+                return "abc"
             if args[0] == "push":
                 return ""
-            if args[:1] == ("fetch",):
+            if args[0] == "fetch":
                 return ""
+            if args[:2] == ("rev-parse", "--abbrev-ref"):
+                return "origin/feature/x\n"
             return "ok"
 
         supagit_sweep.integrate_branch(
@@ -756,10 +802,18 @@ class IntegrateBranchTests(unittest.TestCase):
         def run_git(*args, cwd=None, capture=True):
             if args[:2] == ("status", "--porcelain"):
                 return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "feature/x\n"
+            if args[:3] == ("rev-list", "--left-right", "--count"):
+                return "0\t0"
+            if args[0] == "rev-parse":
+                return "abc"
             if args[0] == "push":
                 return ""
-            if args[:1] == ("fetch",):
+            if args[0] == "fetch":
                 return ""
+            if args[:2] == ("rev-parse", "--abbrev-ref"):
+                return "origin/feature/x\n"
             return "ok"
 
         supagit_sweep.integrate_branch(
@@ -777,6 +831,66 @@ class IntegrateBranchTests(unittest.TestCase):
         )
         self.assertIn("create:feature/x->dev:supagit: integrate feature/x into dev", actions)
         self.assertIn("merge:9", actions)
+
+    def test_integrate_ffs_clean_behind_feature_before_push(self) -> None:
+        actions: list[str] = []
+        tips = {"feature/x": "old", "origin/feature/x": "new"}
+
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                return None
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                return None
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                return 1
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                raise AssertionError("reuse")
+
+            def merge_pr(self, number: int) -> None:
+                actions.append(f"merge:{number}")
+
+        def run_git(*args, cwd=None, capture=True):
+            actions.append("git:" + " ".join(args))
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "feature/x\n"
+            if args[:3] == ("rev-list", "--left-right", "--count"):
+                return "1\t0"
+            if args[0] == "rev-parse" and args[-1] in tips:
+                return tips[args[-1]]
+            if args[0] == "fetch":
+                return ""
+            if args[:2] == ("merge", "--ff-only"):
+                tips["feature/x"] = tips["origin/feature/x"]
+                return ""
+            if args[0] == "push":
+                actions.append("pushed")
+                return ""
+            if args[:2] == ("rev-parse", "--abbrev-ref"):
+                return "origin/feature/x\n"
+            return "ok"
+
+        supagit_sweep.integrate_branch(
+            run_git,
+            gh=FakeGh(),
+            remote="origin",
+            remote_url="git@github.com:acme/demo.git",
+            branch="feature/x",
+            base="dev",
+            cwd=Path("/wt"),
+            message_provider=lambda: "unused",
+            reject_sensitive=lambda paths: None,
+            dry_run=False,
+            contained_in_first=False,
+        )
+        merge_ff = next(i for i, a in enumerate(actions) if "merge --ff-only" in a)
+        push_i = next(i for i, a in enumerate(actions) if a == "pushed")
+        self.assertLess(merge_ff, push_i)
+        self.assertEqual(tips["feature/x"], "new")
 
     def test_contained_branch_fails_closed(self) -> None:
         class FakeGh:
