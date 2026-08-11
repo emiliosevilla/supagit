@@ -116,6 +116,19 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_migrate_item": "Apply pending migrations to {label} ({ref})",
         "plan_promote_item": "Merge {source} into {target} and publish {target}",
         "plan_none_integrate": "No independent work branches to integrate.",
+        "error_ff_dirty": (
+            "Refusing fast-forward of {branch}: the worktree has uncommitted changes. "
+            "Commit and publish them first (supagit publish phase), then re-run. "
+            "supagit will not stash or reset --hard while dirty."
+        ),
+        "publish_defer_behind": (
+            "Local {branch} is behind {remote}/{branch} with a clean worktree; "
+            "fast-forward sync will bring it up to date next."
+        ),
+        "publish_skip_push_behind": (
+            "Committed local changes on {branch}, but it is still behind "
+            "{remote}/{branch} (or has diverged). Skipping push; sync comes next."
+        ),
         "error_contained_integrate": (
             "Branch {branch} is already included in {base}; it needs no new pull request. "
             "Omit it, press Enter for defaults, or type 0/none to skip all work branches."
@@ -395,6 +408,19 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_migrate_item": "Aplicar migraciones pendientes a {label} ({ref})",
         "plan_promote_item": "Fusionar {source} en {target} y publicar {target}",
         "plan_none_integrate": "No hay ramas de trabajo independientes que integrar.",
+        "error_ff_dirty": (
+            "Se rechaza el fast-forward de {branch}: el worktree tiene cambios sin confirmar. "
+            "Confírmalos y publícalos primero (fase publish de supagit) y vuelve a ejecutar. "
+            "supagit no hará stash ni reset --hard con el árbol sucio."
+        ),
+        "publish_defer_behind": (
+            "La rama local {branch} está por detrás de {remote}/{branch} con el worktree limpio; "
+            "el fast-forward la actualizará a continuación."
+        ),
+        "publish_skip_push_behind": (
+            "Se confirmaron cambios locales en {branch}, pero sigue por detrás de "
+            "{remote}/{branch} (o ha divergido). Se omite el push; la sincronización viene después."
+        ),
         "error_contained_integrate": (
             "La rama {branch} ya está incluida en {base}; no necesita una pull request nueva. "
             "Omítela, pulsa Enter para los valores por defecto, o escribe 0/ninguno para "
