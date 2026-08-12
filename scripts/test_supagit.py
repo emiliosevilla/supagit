@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -363,6 +364,7 @@ class ProjectInitTests(unittest.TestCase):
         self.assertEqual(
             config["backend"]["environments"],
             {
+                "dev": {"project_ref_env": "SUPABASE_DEV_PROJECT_REF"},
                 "pre": {"project_ref_env": "MY_PRE_REF"},
                 "prod": {"project_ref_env": "MY_PROD_REF"},
             },
@@ -751,6 +753,468 @@ class I18nAndUpdateTests(unittest.TestCase):
             )
             self.assertTrue(update.ensure_healthy_source_root.repaired)
 
+    def test_unreadable_marker_triggers_heal(self) -> None:
+        update = MODULE.supagit_update
+
+        def fake_clone(dest: Path, **_kwargs) -> None:
+            scripts = dest / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "install-supagit-global.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (scripts / "supagit.py").write_text("# fake\n", encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            marker_dir = home / ".agents" / "skills" / "supagit"
+            marker_dir.mkdir(parents=True)
+            marker = marker_dir / "source-root"
+            marker.write_text("/unreachable\n", encoding="utf-8")
+            managed = (home / ".supagit" / "source").resolve()
+            original_read = Path.read_text
+
+            def flaky_read(self, *args, **kwargs):
+                if Path(self) == marker:
+                    raise PermissionError("marker unreadable")
+                return original_read(self, *args, **kwargs)
+
+            with patch.object(Path, "read_text", flaky_read):
+                with patch.object(update, "_shallow_clone_github", side_effect=fake_clone) as clone:
+                    with patch.object(update, "_run_installer"):
+                        result = update.ensure_healthy_source_root(home=home, lang="en")
+            clone.assert_called_once()
+            self.assertEqual(result, managed)
+            self.assertTrue(update.ensure_healthy_source_root.repaired)
+
+    def test_usable_managed_source_preferred_over_reclone(self) -> None:
+        update = MODULE.supagit_update
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "0\t0"
+            if cmd[:2] == ["git", "status"]:
+                return ""
+            raise AssertionError(cmd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            bad = home / "gone"
+            marker_dir = home / ".agents" / "skills" / "supagit"
+            marker_dir.mkdir(parents=True)
+            (marker_dir / "source-root").write_text(f"{bad}\n", encoding="utf-8")
+            managed = home / ".supagit" / "source"
+            scripts = managed / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "install-supagit-global.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (scripts / "supagit.py").write_text("# fake\n", encoding="utf-8")
+            with patch.object(update, "_run", side_effect=fake_run):
+                with patch.object(update, "_shallow_clone_github") as clone:
+                    with patch.object(update, "_run_installer") as installer:
+                        result = update.ensure_healthy_source_root(home=home, lang="es")
+            clone.assert_not_called()
+            installer.assert_called_once()
+            self.assertEqual(result, managed.resolve())
+            self.assertEqual(
+                (marker_dir / "source-root").read_text(encoding="utf-8").strip(),
+                str(managed.resolve()),
+            )
+            self.assertTrue(update.ensure_healthy_source_root.repaired)
+
+    def test_installer_missing_uses_i18n(self) -> None:
+        update = MODULE.supagit_update
+        MODULE.supagit_i18n.set_lang("en")
+
+        def fake_clone(dest: Path, **_kwargs) -> None:
+            dest.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            installer = (
+                update.managed_source_root(home=home)
+                / "scripts"
+                / "install-supagit-global.sh"
+            )
+            with patch.object(update, "_shallow_clone_github", side_effect=fake_clone):
+                with self.assertRaises(update.UpdateError) as ctx:
+                    update.ensure_healthy_source_root(home=home, lang="en")
+            self.assertEqual(
+                str(ctx.exception),
+                MODULE.t("update_installer_missing", path=str(installer)),
+            )
+
+    def _extract_global_wrapper_text(self) -> str:
+        installer = Path(__file__).with_name("install-supagit-global.sh")
+        text = installer.read_text(encoding="utf-8")
+        start = text.index("cat > \"$global_bin_dir/supagit\" <<'EOF'\n") + len(
+            "cat > \"$global_bin_dir/supagit\" <<'EOF'\n"
+        )
+        end = text.index("\nEOF\n", start)
+        return text[start:end]
+
+    def _seed_installable_clone(
+        self,
+        root: Path,
+        *,
+        origin_url: str | None,
+        include_supagit_py: bool = True,
+    ) -> Path:
+        """Minimal tree that the real installer can copy from, with optional origin."""
+        scripts = root / "scripts"
+        docs = root / "docs"
+        scripts.mkdir(parents=True)
+        docs.mkdir(parents=True)
+        module_files = (
+            "supagit_layout.py",
+            "supagit_inventory.py",
+            "supagit_menu.py",
+            "supagit_sweep.py",
+            "supagit_i18n.py",
+            "supagit_update.py",
+            "supagit_busy.py",
+            "supagit_situation.py",
+            "supagit_supabase.py",
+            "supagit",
+        )
+        for name in module_files:
+            (scripts / name).write_text(f"# stub {name}\n", encoding="utf-8")
+        if include_supagit_py:
+            (scripts / "supagit.py").write_text("# stub entry\n", encoding="utf-8")
+        (docs / "supagit-agent-command.md").write_text("# skill\n", encoding="utf-8")
+        real_installer = Path(__file__).with_name("install-supagit-global.sh")
+        installer = scripts / "install-supagit-global.sh"
+        installer.write_text(real_installer.read_text(encoding="utf-8"), encoding="utf-8")
+        installer.chmod(0o755)
+        subprocess.run(["git", "init"], cwd=str(root), check=True, capture_output=True)
+        if origin_url is not None:
+            subprocess.run(
+                ["git", "remote", "add", "origin", origin_url],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+            )
+        return installer
+
+    def test_installer_rejects_non_supagit_clone(self) -> None:
+        """Wrong-repo install must abort before writing a broken source-root marker."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            clone = Path(tmp) / "other-project"
+            installer = self._seed_installable_clone(
+                clone,
+                origin_url="https://github.com/example/not-supagit.git",
+            )
+            marker = home / ".agents" / "skills" / "supagit" / "source-root"
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["SUPAGIT_LANG"] = "en"
+            env["NO_COLOR"] = "1"
+            completed = subprocess.run(
+                ["sh", str(installer), "--lang", "en"],
+                cwd=str(clone),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(
+                completed.returncode,
+                0,
+                msg=f"expected abort; stdout={completed.stdout!r} stderr={completed.stderr!r}",
+            )
+            self.assertFalse(
+                marker.is_file(),
+                f"must not write source-root for wrong clone; got {marker.read_text() if marker.is_file() else None!r}",
+            )
+            combined = f"{completed.stdout}\n{completed.stderr}".lower()
+            self.assertTrue(
+                "readme" in combined or "curl" in combined or "bootstrap" in combined,
+                msg=f"abort message should point at README curl; got {combined!r}",
+            )
+
+    def test_installer_rejects_missing_supagit_py(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            clone = Path(tmp) / "broken-clone"
+            installer = self._seed_installable_clone(
+                clone,
+                origin_url="https://github.com/emiliosevilla/supagit.git",
+                include_supagit_py=False,
+            )
+            marker = home / ".agents" / "skills" / "supagit" / "source-root"
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["NO_COLOR"] = "1"
+            completed = subprocess.run(
+                ["sh", str(installer), "--lang", "en"],
+                cwd=str(clone),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse(marker.is_file())
+            self.assertIn("README", f"{completed.stdout}\n{completed.stderr}")
+
+    def test_installer_accepts_official_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            clone = Path(tmp) / "supagit"
+            installer = self._seed_installable_clone(
+                clone,
+                origin_url="git@github.com:emiliosevilla/supagit.git",
+            )
+            marker = home / ".agents" / "skills" / "supagit" / "source-root"
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["NO_COLOR"] = "1"
+            # Ensure PATH check does not demand ~/.local/bin already present.
+            env["PATH"] = f"{home / '.local' / 'bin'}:{env.get('PATH', '')}"
+            completed = subprocess.run(
+                ["sh", str(installer), "--lang", "en"],
+                cwd=str(clone),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                msg=f"stdout={completed.stdout!r} stderr={completed.stderr!r}",
+            )
+            self.assertTrue(marker.is_file())
+            self.assertEqual(
+                Path(marker.read_text(encoding="utf-8").strip()).resolve(),
+                clone.resolve(),
+            )
+
+    def test_installer_copies_supabase_and_skill_imports(self) -> None:
+        """Installed skill must include supagit_supabase.py so `import supagit` works."""
+        real_scripts = Path(__file__).resolve().parent
+        real_docs = real_scripts.parent / "docs" / "supagit-agent-command.md"
+        module_files = (
+            "supagit.py",
+            "supagit_layout.py",
+            "supagit_inventory.py",
+            "supagit_menu.py",
+            "supagit_sweep.py",
+            "supagit_i18n.py",
+            "supagit_update.py",
+            "supagit_busy.py",
+            "supagit_situation.py",
+            "supagit_supabase.py",
+            "supagit",
+            "install-supagit-global.sh",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            clone = Path(tmp) / "supagit"
+            scripts = clone / "scripts"
+            docs = clone / "docs"
+            scripts.mkdir(parents=True)
+            docs.mkdir(parents=True)
+            for name in module_files:
+                shutil.copy2(real_scripts / name, scripts / name)
+            shutil.copy2(real_docs, docs / "supagit-agent-command.md")
+            (scripts / "install-supagit-global.sh").chmod(0o755)
+            subprocess.run(["git", "init"], cwd=str(clone), check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/emiliosevilla/supagit.git",
+                ],
+                cwd=str(clone),
+                check=True,
+                capture_output=True,
+            )
+            skill = home / ".agents" / "skills" / "supagit"
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["NO_COLOR"] = "1"
+            env["PATH"] = f"{home / '.local' / 'bin'}:{env.get('PATH', '')}"
+            completed = subprocess.run(
+                ["sh", str(scripts / "install-supagit-global.sh"), "--lang", "en"],
+                cwd=str(clone),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                msg=f"stdout={completed.stdout!r} stderr={completed.stderr!r}",
+            )
+            self.assertTrue(
+                (skill / "supagit_supabase.py").is_file(),
+                "installer must copy supagit_supabase.py into the global skill dir",
+            )
+            import_probe = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import supagit",
+                ],
+                cwd=str(skill),
+                env={**env, "PYTHONPATH": str(skill)},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(
+                import_probe.returncode,
+                0,
+                msg=(
+                    "installed skill must import as `supagit`; "
+                    f"stdout={import_probe.stdout!r} stderr={import_probe.stderr!r}"
+                ),
+            )
+
+    def test_wrapper_does_not_reinstall_stale_source_after_python_update(self) -> None:
+        """Python already refreshed the skill; wrapper cmp must not clobber it with stale source."""
+        module_files = (
+            "supagit.py",
+            "supagit_layout.py",
+            "supagit_inventory.py",
+            "supagit_menu.py",
+            "supagit_sweep.py",
+            "supagit_i18n.py",
+            "supagit_update.py",
+            "supagit_busy.py",
+            "supagit_situation.py",
+            "supagit_supabase.py",
+            "supagit",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            skill = home / ".agents" / "skills" / "supagit"
+            skill.mkdir(parents=True)
+            source = home / "stale-source"
+            scripts = source / "scripts"
+            docs = source / "docs"
+            scripts.mkdir(parents=True)
+            docs.mkdir(parents=True)
+
+            fresh = "# FRESH_FROM_PYTHON_UPDATE\n"
+            stale = "# STALE_SOURCE_CLONE\n"
+            for name in module_files:
+                (skill / name).write_text(fresh if name.endswith(".py") or name == "supagit" else fresh, encoding="utf-8")
+                (scripts / name).write_text(stale, encoding="utf-8")
+            (skill / "SKILL.md").write_text(fresh, encoding="utf-8")
+            (docs / "supagit-agent-command.md").write_text(stale, encoding="utf-8")
+            (skill / "source-root").write_text(f"{source.resolve()}\n", encoding="utf-8")
+
+            # Fake installer: if wrapper still does the cmp dance, it will overwrite skill with stale.
+            installer = scripts / "install-supagit-global.sh"
+            installer.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                f'skill="{skill}"\n'
+                f'src="{scripts}"\n'
+                "for f in "
+                + " ".join(module_files)
+                + "; do install -m 644 \"$src/$f\" \"$skill/$f\"; done\n"
+                'install -m 644 "$src/../docs/supagit-agent-command.md" "$skill/SKILL.md"\n'
+                "printf 'INSTALLER_RAN\\n' > \"$skill/installer-ran\"\n",
+                encoding="utf-8",
+            )
+            installer.chmod(0o755)
+
+            # Skill entrypoint: prove wrapper reached Python without reinstall.
+            (skill / "supagit.py").write_text(
+                "#!/usr/bin/env python3\n"
+                "from pathlib import Path\n"
+                "Path(__file__).with_name('ran-from-python').write_text('ok\\n', encoding='utf-8')\n"
+                "print('python-ok')\n",
+                encoding="utf-8",
+            )
+            # Keep skill copy of modules as FRESH (wrapper must not replace them).
+            for name in module_files:
+                if name == "supagit.py":
+                    continue
+                (skill / name).write_text(fresh, encoding="utf-8")
+
+            wrapper = home / ".local" / "bin" / "supagit"
+            wrapper.parent.mkdir(parents=True)
+            wrapper.write_text(self._extract_global_wrapper_text() + "\n", encoding="utf-8")
+            wrapper.chmod(0o755)
+
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["SUPAGIT_LANG"] = "en"
+            completed = subprocess.run(
+                ["sh", str(wrapper)],
+                cwd=str(home),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                msg=f"stdout={completed.stdout!r} stderr={completed.stderr!r}",
+            )
+            self.assertIn("python-ok", completed.stdout)
+            self.assertFalse(
+                (skill / "installer-ran").exists(),
+                "wrapper must not reinstall; update authority is Python-only",
+            )
+            self.assertTrue((skill / "ran-from-python").is_file())
+            self.assertIn("FRESH_FROM_PYTHON_UPDATE", (skill / "supagit_update.py").read_text(encoding="utf-8"))
+            self.assertNotIn("STALE_SOURCE_CLONE", (skill / "supagit_update.py").read_text(encoding="utf-8"))
+            wrapper_src = self._extract_global_wrapper_text()
+            self.assertNotIn("cmp -s", wrapper_src)
+            self.assertIn('exec python3', wrapper_src)
+
+    def test_pull_and_reinstall_prints_build_marker(self) -> None:
+        update = MODULE.supagit_update
+        MODULE.supagit_i18n.set_lang("en")
+        from io import StringIO
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "1\t0"
+            if cmd[:2] == ["git", "pull"]:
+                return ""
+            raise AssertionError(cmd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)
+            scripts = source / "scripts"
+            scripts.mkdir()
+            (scripts / "install-supagit-global.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            progress = StringIO()
+            with patch.object(update, "_run", side_effect=fake_run):
+                with patch.object(update, "_run_installer"):
+                    update.pull_and_reinstall(source, lang="en", progress=progress)
+            text = progress.getvalue()
+            self.assertIn(
+                MODULE.t("update_reinstalled", build=update.BUILD_STAMP),
+                text,
+            )
+            MODULE.supagit_i18n.set_lang("es")
+            self.assertEqual(
+                MODULE.t("update_reinstalled", build=update.BUILD_STAMP),
+                f"[supagit] Reinstalado. [build: {update.BUILD_STAMP}]",
+            )
+
     def test_needs_skip_update_env(self) -> None:
         with patch.dict(os.environ, {MODULE.supagit_update.SKIP_ENV: "1"}):
             self.assertTrue(MODULE.needs_skip_update())
@@ -1059,7 +1523,7 @@ class CheckoutFlexTests(unittest.TestCase):
 
         pipeline.explain = explain  # type: ignore[method-assign]
         pipeline._situation_git = situation_git  # type: ignore[method-assign]
-        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
         selection = pipeline.run_branch_menu(inv)
         self.assertEqual(selection.pipeline, ("dev",))
         self.assertTrue(any("situation" in e.lower() or "pipeline" in e.lower() for e in explained))

@@ -158,6 +158,62 @@ class BuildBranchSyncTests(unittest.TestCase):
         self.assertEqual(finding.policy, SIT.PolicyClass.INFO)
         self.assertEqual(finding.cure_id, "none")
 
+    def test_stale_upstream_ref_treated_as_no_upstream(self) -> None:
+        def git(*args, **kwargs):
+            cmd = list(args)
+            if cmd[:2] == ["rev-parse", "--verify"]:
+                if cmd[2] == "refs/heads/work":
+                    return "abc\n"
+                if cmd[2] in {"origin/work", "refs/remotes/origin/work"}:
+                    raise RuntimeError("missing stale ref")
+                raise RuntimeError(f"unexpected verify {cmd[2]}")
+            if cmd[:2] == ["rev-parse", "--abbrev-ref"]:
+                return "origin/work\n"
+            if cmd[0] == "status":
+                return ""
+            if cmd[:3] == ["rev-list", "--left-right", "--count"]:
+                raise AssertionError("rev-list must not run against a missing upstream")
+            raise AssertionError(cmd)
+
+        sync, finding = SIT.build_branch_sync(
+            git, "work", remote="origin", role="feature", worktree_path=None
+        )
+        self.assertEqual(sync.sync, SIT.SyncStatus.NO_UPSTREAM)
+        self.assertIsNone(sync.upstream)
+        self.assertEqual(finding.cure_id, "none")
+
+
+class SequencerStateTests(unittest.TestCase):
+    def test_none_when_clean(self) -> None:
+        def git(*args, **kwargs):
+            raise RuntimeError("missing")
+
+        self.assertIsNone(SIT.sequencer_state(git))
+
+    def test_detects_merge_head(self) -> None:
+        def git(*args, **kwargs):
+            if list(args)[:2] == ["rev-parse", "--verify"] and args[2] == "MERGE_HEAD":
+                return "abc\n"
+            raise RuntimeError("missing")
+
+        self.assertEqual(SIT.sequencer_state(git), SIT.SequencerKind.MERGE)
+
+    def test_detects_rebase_head(self) -> None:
+        def git(*args, **kwargs):
+            if list(args)[:2] == ["rev-parse", "--verify"] and args[2] == "REBASE_HEAD":
+                return "abc\n"
+            raise RuntimeError("missing")
+
+        self.assertEqual(SIT.sequencer_state(git), SIT.SequencerKind.REBASE)
+
+    def test_detects_cherry_pick_head(self) -> None:
+        def git(*args, **kwargs):
+            if list(args)[:2] == ["rev-parse", "--verify"] and args[2] == "CHERRY_PICK_HEAD":
+                return "abc\n"
+            raise RuntimeError("missing")
+
+        self.assertEqual(SIT.sequencer_state(git), SIT.SequencerKind.CHERRY_PICK)
+
 
 class RenderPreflightTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -214,7 +270,7 @@ class RenderPreflightTests(unittest.TestCase):
             SIT.SyncStatus.BEHIND_ONLY,
             0,
             2,
-            True,
+            False,
             "/repo",
         )
         feature = SIT.BranchSync(
@@ -229,9 +285,9 @@ class RenderPreflightTests(unittest.TestCase):
         findings = (
             SIT.Finding(
                 SIT.PolicyClass.SAFE_CURE,
-                "publish_then_ff",
+                "ff_only",
                 SIT.SyncStatus.BEHIND_ONLY,
-                True,
+                False,
                 "pipeline0",
             ),
             SIT.Finding(
@@ -244,7 +300,7 @@ class RenderPreflightTests(unittest.TestCase):
         )
         sit = SIT.Situation(
             current_branch="dev",
-            dirty=True,
+            dirty=False,
             pipeline0=pipeline0,
             features=(feature,),
             findings=findings,
@@ -257,6 +313,39 @@ class RenderPreflightTests(unittest.TestCase):
         self.assertIn("before integrating", lines[0].lower())
         self.assertIn("dev", lines[1])
         self.assertIn("fast-forward", lines[1].lower())
+
+    def test_plan_cure_lines_skips_ff_for_publish_then_ff(self) -> None:
+        """Dirty+behind pipeline0 rebases inside publish; no separate ff plan line."""
+        pipeline0 = SIT.BranchSync(
+            "dev",
+            "origin/dev",
+            SIT.SyncStatus.BEHIND_ONLY,
+            0,
+            2,
+            True,
+            "/repo",
+        )
+        findings = (
+            SIT.Finding(
+                SIT.PolicyClass.SAFE_CURE,
+                "publish_then_ff",
+                SIT.SyncStatus.BEHIND_ONLY,
+                True,
+                "pipeline0",
+            ),
+        )
+        sit = SIT.Situation(
+            current_branch="dev",
+            dirty=True,
+            pipeline0=pipeline0,
+            features=(),
+            findings=findings,
+            gh_ready=None,
+            self_update=None,
+        )
+        lines = SIT.plan_cure_lines(sit, remote="origin")
+        self.assertEqual(lines, ())
+        self.assertIsNone(SIT.pipeline0_ff_line(sit, remote="origin"))
 
 
 class PolicyTests(unittest.TestCase):

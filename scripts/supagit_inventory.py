@@ -98,6 +98,23 @@ def _upstream_name(branch: str, git_runner: GitRunner, cwd: Path) -> str | None:
     return None
 
 
+def _branch_has_upstream_config(
+    branch: str, git_runner: GitRunner, cwd: Path
+) -> bool:
+    """True when branch.<name>.remote is set (even if the tracking ref is gone)."""
+    try:
+        remote = git_runner(
+            "config",
+            "--get",
+            f"branch.{branch}.remote",
+            cwd=cwd,
+            capture=True,
+        ).strip()
+        return bool(remote)
+    except Exception:
+        return False
+
+
 def _ahead_behind(
     branch: str, compare_ref: str, git_runner: GitRunner, cwd: Path
 ) -> tuple[int, int]:
@@ -174,8 +191,17 @@ def build_inventory(
         dirty = bool(worktree_path and _status_paths(git_runner, worktree_path))
 
         upstream = _upstream_name(name, git_runner, cwd)
-        if upstream is not None:
+        # After fetch --prune, branch.<name>.remote may still name a deleted
+        # remote-tracking ref. Do not fall back to pipeline[0]'s remote — that
+        # mislabels sync for independent work branches.
+        if upstream is not None and not _ref_exists(upstream, git_runner, cwd):
+            upstream = None
+            ahead, behind = 0, 0
+        elif upstream is not None:
             ahead, behind = _ahead_behind(name, upstream, git_runner, cwd)
+        elif _branch_has_upstream_config(name, git_runner, cwd):
+            upstream = None
+            ahead, behind = 0, 0
         elif remote_first_exists:
             upstream = remote_first
             ahead, behind = _ahead_behind(name, remote_first, git_runner, cwd)

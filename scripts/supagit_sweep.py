@@ -4,13 +4,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
+import os
 import re
+import shlex
+import subprocess
+import sys
+import time
 
 from supagit_inventory import RepoInventory
 from supagit_i18n import t
 
+# Patchable in tests (backoff between UNKNOWN mergeability polls).
+sleep = time.sleep
+
 GitRunner = Callable[..., str]
-RejectSensitive = Callable[[Sequence[str]], None]
+RejectSensitive = Callable[[Sequence[str], Path], Sequence[str]]
+IsSensitive = Callable[[str], bool]
+ExplainFn = Callable[[str], None]
+ConfirmFn = Callable[[str], bool]
+EditorFn = Callable[[Sequence[str], Path], None]
+
+_CYAN = "\033[36m"
+_GREEN = "\033[32m"
+_RESET = "\033[0m"
+_YES_ANSWERS = frozenset({"", "y", "yes", "s", "si", "sí"})
 
 PR_BODY = "Integrated by supagit sweeper."
 PROMOTE_PR_BODY = "Promoted by supagit."
@@ -34,6 +51,14 @@ class SyncResult:
     changed: bool
     before: str
     after: str
+
+
+@dataclass(frozen=True)
+class SweepResult:
+    """Outcome of a sweep action that may skip instead of fail-closed."""
+
+    skipped: bool = False
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -342,11 +367,13 @@ class GhClient:
             return 1, "", str(exc)
 
     def ensure_ready(self) -> None:
-        """Ensure gh works; refresh expired tokens automatically.
+        """Ensure gh works; refresh expired tokens, then interactive login.
 
         When the keyring token is stale, `gh auth status` fails even though the
-        user previously logged in. Try `gh auth refresh -h github.com` once and
-        re-check before failing closed.
+        user previously logged in. Try `gh auth refresh -h github.com` once.
+        On refresh failure with a TTY, launch `gh auth login -h github.com`
+        once (web/device), then re-verify. Without a TTY, fail closed — never
+        hang, and never print “run this yourself” as the primary fix.
         """
         if self._dry_run:
             return
@@ -373,13 +400,35 @@ class GhClient:
         # Stale/expired token — attempt silent refresh, then verify.
         try:
             self._run(["gh", "auth", "refresh", "-h", "github.com"])
-        except Exception as exc:
-            raise SweepError(
-                t(
-                    "error_gh_refresh_failed",
-                    detail=str(exc),
-                )
-            ) from exc
+        except Exception as refresh_exc:
+            if not sys.stdin.isatty():
+                raise SweepError(
+                    t(
+                        "error_gh_refresh_failed",
+                        detail=str(refresh_exc),
+                    )
+                ) from refresh_exc
+            # TTY: launch interactive login once (web/device), then re-verify.
+            try:
+                self._run(["gh", "auth", "login", "-h", "github.com"])
+            except Exception as login_exc:
+                raise SweepError(
+                    t(
+                        "error_gh_login_failed",
+                        refresh_detail=str(refresh_exc),
+                        detail=str(login_exc),
+                    )
+                ) from login_exc
+            try:
+                self._run(["gh", "auth", "status"])
+                return
+            except Exception as status_exc:
+                raise SweepError(
+                    t(
+                        "error_gh_still_unauthenticated",
+                        detail=str(status_exc),
+                    )
+                ) from status_exc
         try:
             self._run(["gh", "auth", "status"])
         except Exception as exc:
@@ -443,6 +492,30 @@ class GhClient:
             ) from exc
         return str(data.get("mergeable") or "UNKNOWN")
 
+    def pr_state(self, number: int) -> str:
+        """Return GitHub PR state: OPEN, MERGED, or CLOSED."""
+        if self._dry_run:
+            return "MERGED"
+        import json
+
+        output = self._run_raw(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(number),
+                "--json",
+                "state",
+            ]
+        ).strip()
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise SweepError(
+                f"Could not parse state for pull request #{number}."
+            ) from exc
+        return str(data.get("state") or "OPEN").upper()
+
     def create_pr(self, head: str, base: str, title: str) -> int:
         if self._dry_run:
             return 0
@@ -472,16 +545,29 @@ class GhClient:
     def merge_pr(
         self, number: int, *, delete_branch: bool = True, admin: bool = False
     ) -> None:
+        """Merge via ladder: plain merge → --auto → --admin.
+
+        ``admin`` is kept for call-site compatibility but is ignored: the ladder
+        always ends with ``--admin`` after policy blocks, and never starts there.
+        """
+        del admin  # ladder owns admin escalation
         if self._dry_run:
             return
-        command = ["gh", "pr", "merge", str(number), "--merge"]
-        if admin:
-            command.append("--admin")
-        if delete_branch:
-            command.append("--delete-branch")
+
+        def _cmd(*, auto: bool = False, use_admin: bool = False) -> list[str]:
+            command = ["gh", "pr", "merge", str(number), "--merge"]
+            if auto:
+                command.append("--auto")
+            if use_admin:
+                command.append("--admin")
+            if delete_branch:
+                command.append("--delete-branch")
+            return command
+
+        first = _cmd()
         first_exc: Exception
         try:
-            self._run(command)
+            self._run(first)
             return
         except Exception as exc:
             first_exc = exc
@@ -500,23 +586,34 @@ class GhClient:
             except Exception:
                 pass
             try:
-                self._run(command)
+                self._run(first)
                 return
             except Exception:
                 raise first_exc
 
-        # Branch-policy block: try enabling auto-merge so GitHub merges once
-        # required checks turn green instead of hard-failing.
+        # Branch-policy / not-mergeable: climb merge → --auto → --admin.
+        # `--auto` exit 0 only arms auto-merge; wait for MERGED before success.
         if policyish:
-            auto_cmd = ["gh", "pr", "merge", str(number), "--merge", "--auto"]
-            if admin:
-                auto_cmd.append("--admin")
-            if delete_branch:
-                auto_cmd.append("--delete-branch")
+            auto_armed = False
             try:
-                self._run(auto_cmd)
-                return
+                self._run(_cmd(auto=True))
+                auto_armed = True
             except Exception:
+                pass
+
+            if auto_armed:
+                if wait_until_pr_merged(self, number):
+                    return
+                print(t("note_pr_auto_merge_armed", number=number))
+
+            try:
+                self._run(_cmd(use_admin=True))
+                return
+            except Exception as admin_exc:
+                if auto_armed:
+                    raise SweepError(
+                        t("error_pr_auto_merge_not_completed", number=number)
+                    ) from admin_exc
                 raise first_exc
 
         raise first_exc
@@ -548,6 +645,48 @@ class GhClient:
         return number
 
 
+def poll_pr_mergeable(
+    gh: GhClient,
+    number: int,
+    *,
+    attempts: int = 3,
+    delays: Sequence[float] = (1.0, 2.0),
+    sleeper: Callable[[float], None] | None = None,
+) -> str:
+    """Poll GitHub mergeability up to ``attempts`` times when status is UNKNOWN."""
+    wait = sleeper or sleep
+    last = "UNKNOWN"
+    for index in range(attempts):
+        last = gh.pr_mergeable(number)
+        if last != "UNKNOWN":
+            return last
+        if index >= attempts - 1:
+            break
+        delay = delays[index] if index < len(delays) else delays[-1]
+        wait(delay)
+    return last
+
+
+def wait_until_pr_merged(
+    gh: GhClient,
+    number: int,
+    *,
+    attempts: int = 5,
+    delays: Sequence[float] = (1.0, 2.0, 3.0, 5.0),
+    sleeper: Callable[[float], None] | None = None,
+) -> bool:
+    """Poll until the PR state is MERGED. Returns False on timeout."""
+    wait = sleeper or sleep
+    for index in range(attempts):
+        if gh.pr_state(number) == "MERGED":
+            return True
+        if index >= attempts - 1:
+            break
+        delay = delays[index] if index < len(delays) else delays[-1]
+        wait(delay)
+    return gh.pr_state(number) == "MERGED"
+
+
 def commit_dirty_tree(
     run_git: GitRunner,
     *,
@@ -555,20 +694,39 @@ def commit_dirty_tree(
     message: str,
     reject_sensitive: RejectSensitive,
     dry_run: bool,
+    is_sensitive: IsSensitive | None = None,
 ) -> bool:
     status = run_git("status", "--porcelain", cwd=cwd)
     if not status.strip():
         return False
 
     status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
-    reject_sensitive(status_paths)
+    safe_paths = [path for path in reject_sensitive(status_paths, cwd) if path]
+    if not safe_paths:
+        raise SweepError(t("error_only_secrets_remaining"))
 
     if dry_run:
         return True
 
-    run_git("add", "-A", cwd=cwd)
+    safe_set = set(safe_paths)
+    sense = is_sensitive or (lambda path: path not in safe_set)
+
+    run_git("add", "--", *safe_paths, cwd=cwd)
     staged = run_git("diff", "--cached", "--name-only", cwd=cwd)
-    reject_sensitive(staged.splitlines())
+    staged_paths = [path for path in staged.splitlines() if path]
+    leaked = [path for path in staged_paths if sense(path)]
+    if leaked:
+        # Novice chaos: secrets may already be in the index (e.g. prior `git add -A`).
+        run_git("restore", "--staged", "--", *leaked, cwd=cwd)
+        staged = run_git("diff", "--cached", "--name-only", cwd=cwd)
+        staged_paths = [path for path in staged.splitlines() if path]
+    if not staged_paths:
+        raise SweepError(t("error_only_secrets_remaining"))
+    still_sensitive = [path for path in staged_paths if sense(path)]
+    if still_sensitive:
+        raise SweepError(
+            t("error_only_secrets", paths=", ".join(sorted(still_sensitive)))
+        )
     run_git("diff", "--cached", "--check", cwd=cwd)
     run_git("commit", "-m", message, cwd=cwd)
     return True
@@ -598,7 +756,7 @@ def assert_commits_for_pr(
     remote: str,
     cwd: Path,
 ) -> int:
-    """Return how many commits head is ahead of base; raise if the PR would be empty."""
+    """Return how many commits head is ahead of base (0 when the range is empty)."""
     remote_base = f"{remote}/{base}"
     try:
         run_git(
@@ -637,15 +795,6 @@ def assert_commits_for_pr(
             f"Could not count commits for {base_ref}..{head} (got {raw!r})."
         ) from exc
 
-    if count == 0:
-        raise SweepError(
-            t(
-                "error_empty_pr",
-                head=head,
-                base=base,
-                base_ref=base_ref,
-            )
-        )
     return count
 
 
@@ -694,6 +843,100 @@ def push_branch(
     run_git("push", remote, f"{branch}:{branch}", cwd=cwd)
 
 
+def conflicted_paths(run_git: GitRunner, *, cwd: Path) -> list[str]:
+    """Return unmerged paths left by a conflicted rebase/merge."""
+    try:
+        out = run_git("diff", "--name-only", "--diff-filter=U", cwd=cwd)
+    except Exception:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _colour_tty_enabled() -> bool:
+    return bool(sys.stdout.isatty() and os.environ.get("TERM") != "dumb")
+
+
+def default_explain_rebase(message: str) -> None:
+    if _colour_tty_enabled():
+        print(f"{_CYAN}{message}{_RESET}")
+    else:
+        print(message)
+
+
+def default_confirm_rebase_continue(prompt: str) -> bool:
+    """Green [Y/n] gate; Enter = yes. Non-TTY returns False (cannot guide)."""
+    if not sys.stdin.isatty():
+        return False
+    rendered = f"{prompt}{t('confirm_suffix')}"
+    if _colour_tty_enabled():
+        rendered = f"{_GREEN}{rendered}{_RESET}"
+    answer = input(rendered).strip().lower()
+    if answer in _YES_ANSWERS:
+        return True
+    if answer in {"n", "no"}:
+        return False
+    return True
+
+
+def open_conflict_editor(paths: Sequence[str], *, cwd: Path) -> None:
+    """Open conflicted files in $VISUAL / $EDITOR (default nano)."""
+    if not paths:
+        return
+    raw = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
+    cmd = shlex.split(raw) + list(paths)
+    subprocess.run(cmd, cwd=str(cwd), check=False)
+
+
+def _abort_rebase_quietly(run_git: GitRunner, *, cwd: Path) -> None:
+    try:
+        run_git("rebase", "--abort", cwd=cwd)
+    except Exception:
+        pass
+
+
+def _guide_rebase_conflicts(
+    run_git: GitRunner,
+    *,
+    branch: str,
+    onto_ref: str,
+    cwd: Path,
+    explain: ExplainFn,
+    confirm_continue: ConfirmFn,
+    open_editor: EditorFn,
+) -> None:
+    """Tutor loop: list files → editor → confirm → add + rebase --continue."""
+    while True:
+        paths = conflicted_paths(run_git, cwd=cwd)
+        files = "\n".join(f"  • {path}" for path in paths) or "  • (unlisted)"
+        explain(
+            t(
+                "explain_rebase_conflict",
+                branch=branch,
+                base_ref=onto_ref,
+                files=files,
+            )
+        )
+        open_editor(paths, cwd=cwd)
+        if not confirm_continue(t("confirm_rebase_continue")):
+            raise SweepError(
+                t("error_rebase_conflict_cancelled", branch=branch, base_ref=onto_ref)
+            )
+        if paths:
+            run_git("add", *paths, cwd=cwd)
+        else:
+            run_git("add", "-u", cwd=cwd)
+        try:
+            # Avoid a second EDITOR popup for the rebase commit message.
+            run_git("-c", "core.editor=true", "rebase", "--continue", cwd=cwd)
+            return
+        except Exception as cont_exc:
+            if conflicted_paths(run_git, cwd=cwd):
+                continue
+            raise SweepError(
+                t("error_rebase_conflict", branch=branch, base_ref=onto_ref)
+            ) from cont_exc
+
+
 def rebase_branch_onto(
     run_git: GitRunner,
     branch: str,
@@ -701,24 +944,38 @@ def rebase_branch_onto(
     *,
     cwd: Path,
     dry_run: bool,
+    force: bool = False,
+    explain: ExplainFn | None = None,
+    confirm_continue: ConfirmFn | None = None,
+    open_editor: EditorFn | None = None,
+    interactive: bool | None = None,
 ) -> bool:
-    """Rebase ``branch`` onto ``onto_ref`` when the base moved ahead. Returns True if rebased."""
-    try:
-        run_git("merge-base", "--is-ancestor", onto_ref, branch, cwd=cwd)
-        return False
-    except Exception:
-        pass
+    """Rebase ``branch`` onto ``onto_ref`` when the base moved ahead. Returns True if rebased.
 
-    try:
-        behind = int(
-            run_git("rev-list", "--count", f"{branch}..{onto_ref}", cwd=cwd).strip()
-        )
-    except ValueError as exc:
-        raise SweepError(
-            f"Could not count commits between {branch} and {onto_ref} before rebase."
-        ) from exc
-    if behind <= 0:
-        return False
+    When ``force`` is True (CONFLICTING PR recovery), skip the ancestor/behind
+    short-circuits and always attempt the rebase.
+
+    On conflicts: keep rebase state, list files, open $EDITOR / tutor loop,
+    then ``git add`` + ``rebase --continue`` on confirm. Abort only on explicit
+    cancel (or when interactive guidance is impossible).
+    """
+    if not force:
+        try:
+            run_git("merge-base", "--is-ancestor", onto_ref, branch, cwd=cwd)
+            return False
+        except Exception:
+            pass
+
+        try:
+            behind = int(
+                run_git("rev-list", "--count", f"{branch}..{onto_ref}", cwd=cwd).strip()
+            )
+        except ValueError as exc:
+            raise SweepError(
+                f"Could not count commits between {branch} and {onto_ref} before rebase."
+            ) from exc
+        if behind <= 0:
+            return False
 
     if dry_run:
         return True
@@ -734,21 +991,60 @@ def rebase_branch_onto(
         run_git("checkout", branch, cwd=cwd)
         switched = True
 
+    explain_fn = explain or default_explain_rebase
+    confirm_fn = confirm_continue or default_confirm_rebase_continue
+    editor_fn = open_editor or open_conflict_editor
+    can_guide = sys.stdin.isatty() if interactive is None else interactive
+
     try:
         run_git("rebase", onto_ref, cwd=cwd)
     except Exception as exc:
+        paths = conflicted_paths(run_git, cwd=cwd)
+        if not paths and not can_guide:
+            _abort_rebase_quietly(run_git, cwd=cwd)
+            if switched and current:
+                try:
+                    run_git("checkout", current, cwd=cwd)
+                except Exception:
+                    pass
+            raise SweepError(
+                t("error_rebase_conflict", branch=branch, base_ref=onto_ref)
+            ) from exc
+
+        if not can_guide and confirm_continue is None:
+            # Keep state only when we can guide; otherwise clean abort.
+            _abort_rebase_quietly(run_git, cwd=cwd)
+            if switched and current:
+                try:
+                    run_git("checkout", current, cwd=cwd)
+                except Exception:
+                    pass
+            raise SweepError(
+                t(
+                    "error_rebase_conflict_needs_interactive",
+                    branch=branch,
+                    base_ref=onto_ref,
+                )
+            ) from exc
+
         try:
-            run_git("rebase", "--abort", cwd=cwd)
-        except Exception:
-            pass
-        if switched and current:
-            try:
-                run_git("checkout", current, cwd=cwd)
-            except Exception:
-                pass
-        raise SweepError(
-            t("error_rebase_conflict", branch=branch, base_ref=onto_ref)
-        ) from exc
+            _guide_rebase_conflicts(
+                run_git,
+                branch=branch,
+                onto_ref=onto_ref,
+                cwd=cwd,
+                explain=explain_fn,
+                confirm_continue=confirm_fn,
+                open_editor=editor_fn,
+            )
+        except SweepError:
+            _abort_rebase_quietly(run_git, cwd=cwd)
+            if switched and current:
+                try:
+                    run_git("checkout", current, cwd=cwd)
+                except Exception:
+                    pass
+            raise
 
     if switched and current:
         run_git("checkout", current, cwd=cwd)
@@ -768,11 +1064,15 @@ def integrate_branch(
     reject_sensitive: RejectSensitive,
     dry_run: bool,
     contained_in_first: bool,
-) -> None:
+    is_sensitive: IsSensitive | None = None,
+    explain: ExplainFn | None = None,
+    confirm_continue: ConfirmFn | None = None,
+    open_editor: EditorFn | None = None,
+    interactive: bool | None = None,
+) -> SweepResult:
     if contained_in_first:
-        raise SweepError(
-            t("error_nothing_to_integrate", branch=branch, base=base)
-        )
+        print(t("note_nothing_to_merge", branch=branch, base=base))
+        return SweepResult(skipped=True, reason="already merged")
 
     gh.ensure_ready()
     gh.ensure_github_remote(remote_url)
@@ -786,6 +1086,7 @@ def integrate_branch(
             message=message,
             reject_sensitive=reject_sensitive,
             dry_run=dry_run,
+            is_sensitive=is_sensitive,
         )
     elif remote_heads_exist(run_git, remote, branch, cwd=cwd):
         # Fast-forward only when the remote feature still exists. After a merged
@@ -813,38 +1114,66 @@ def integrate_branch(
         raise SweepError(f"Could not fetch {remote_base} before integrating.") from exc
 
     rebased = rebase_branch_onto(
-        run_git, branch, remote_base, cwd=cwd, dry_run=dry_run
+        run_git,
+        branch,
+        remote_base,
+        cwd=cwd,
+        dry_run=dry_run,
+        explain=explain,
+        confirm_continue=confirm_continue,
+        open_editor=open_editor,
+        interactive=interactive,
     )
     if rebased and not dry_run:
         run_git("push", "--force-with-lease", remote, branch, cwd=cwd)
 
     pr_number = gh.find_open_pr(branch, base)
     if pr_number is None:
-        assert_commits_for_pr(
+        count = assert_commits_for_pr(
             run_git,
             head=branch,
             base=base,
             remote=remote,
             cwd=cwd,
         )
+        if count == 0:
+            print(t("note_nothing_to_merge", branch=branch, base=base))
+            return SweepResult(skipped=True, reason="already merged")
         title = f"supagit: integrate {branch} into {base}"
         pr_number = gh.create_pr(branch, base, title)
 
-    mergeable = gh.pr_mergeable(pr_number)
+    mergeable = poll_pr_mergeable(gh, pr_number)
     if mergeable == "CONFLICTING":
-        raise SweepError(
-            t(
-                "error_pr_merge_conflict",
-                head=branch,
-                base=base,
-                number=pr_number,
-            )
+        # Rebase onto current base and push, then re-poll before failing closed.
+        recovered = rebase_branch_onto(
+            run_git,
+            branch,
+            remote_base,
+            cwd=cwd,
+            dry_run=dry_run,
+            force=True,
+            explain=explain,
+            confirm_continue=confirm_continue,
+            open_editor=open_editor,
+            interactive=interactive,
         )
+        if recovered and not dry_run:
+            run_git("push", "--force-with-lease", remote, branch, cwd=cwd)
+        mergeable = poll_pr_mergeable(gh, pr_number)
+        if mergeable == "CONFLICTING":
+            raise SweepError(
+                t(
+                    "error_pr_merge_conflict",
+                    head=branch,
+                    base=base,
+                    number=pr_number,
+                )
+            )
 
-    gh.merge_pr(pr_number, admin=True)
+    gh.merge_pr(pr_number)
 
     if dry_run:
-        return
+        return SweepResult(skipped=False)
 
     try:
         run_git(
@@ -855,6 +1184,8 @@ def integrate_branch(
         )
     except Exception as exc:
         raise SweepError(f"Could not fetch {remote}/{base} after merge.") from exc
+
+    return SweepResult(skipped=False)
 
 
 def plan_cleanup(

@@ -15,6 +15,12 @@ class SyncStatus(str, Enum):
     NO_UPSTREAM = "no_upstream"
 
 
+class SequencerKind(str, Enum):
+    MERGE = "merge"
+    REBASE = "rebase"
+    CHERRY_PICK = "cherry-pick"
+
+
 class PolicyClass(str, Enum):
     SAFE_CURE = "safe_cure"
     BLOCKED = "blocked"
@@ -23,6 +29,25 @@ class PolicyClass(str, Enum):
 
 class SituationError(RuntimeError):
     pass
+
+
+def sequencer_state(git, *, cwd: str | None = None) -> SequencerKind | None:
+    """Return in-progress merge/rebase/cherry-pick kind, or None if clean."""
+    kw: dict = {}
+    if cwd is not None:
+        kw["cwd"] = cwd
+    checks = (
+        ("MERGE_HEAD", SequencerKind.MERGE),
+        ("REBASE_HEAD", SequencerKind.REBASE),
+        ("CHERRY_PICK_HEAD", SequencerKind.CHERRY_PICK),
+    )
+    for head, kind in checks:
+        try:
+            git("rev-parse", "--verify", head, **kw)
+            return kind
+        except Exception:
+            continue
+    return None
 
 
 @dataclass(frozen=True)
@@ -167,7 +192,7 @@ def pipeline0_ff_line(situation: Situation, *, remote: str) -> str | None:
     for finding in situation.findings:
         if finding.role != "pipeline0":
             continue
-        if finding.cure_id in {"ff_only", "publish_then_ff"}:
+        if finding.cure_id in {"ff_only"}:
             return t(
                 "plan_ff_item",
                 branch=p0.name,
@@ -238,6 +263,16 @@ def build_branch_sync(
     try:
         upstream = git("rev-parse", "--abbrev-ref", f"{name}@{{upstream}}").strip()
     except Exception:
+        upstream = None
+
+    # Configured upstream can outlive a pruned remote-tracking ref.
+    if upstream:
+        try:
+            git("rev-parse", "--verify", upstream)
+        except Exception:
+            upstream = None
+
+    if not upstream:
         sync = BranchSync(
             name=name,
             upstream=None,

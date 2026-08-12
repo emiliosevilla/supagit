@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Sequence
 
 from supagit_inventory import (
@@ -174,6 +175,14 @@ def classify_menu_branches(
     return worktrees, other_work, pipeline
 
 
+def single_pending_feature(inventory: RepoInventory) -> str | None:
+    """Return the sole pending [✓] feature name, or None if zero/many."""
+    pending = default_integrate_names(inventory)
+    if len(pending) == 1:
+        return pending[0]
+    return None
+
+
 def _work_branch_check(branch: BranchInfo) -> str:
     # Contained work is shown checked (already in the base); Enter still skips
     # opening a new PR for those names via default_integrate_names().
@@ -264,12 +273,19 @@ def render_execution_plan(
     first_branch: str | None = None,
     remote: str | None = None,
     situation: Situation | None = None,
+    migrate_targets: Mapping[str, str] | None = None,
 ) -> str:
     lines: list[str] = [t("plan_header")]
     base = selection.pipeline[0]
     remote_name = remote or "origin"
+    targets = migrate_targets or {}
 
     publish_branch = first_branch or base
+    # Database before code: pipeline[0] migrate precedes publish.
+    first_ref = targets.get(publish_branch)
+    if first_ref:
+        lines.append(t("plan_migrate_item", label=publish_branch, ref=first_ref))
+
     if remote is not None:
         lines.append(t("plan_publish_item", branch=publish_branch, remote=remote))
 
@@ -292,6 +308,9 @@ def render_execution_plan(
             lines.append(pipeline_ff)
 
     for source, target in zip(selection.pipeline, selection.pipeline[1:]):
+        target_ref = targets.get(target)
+        if target_ref:
+            lines.append(t("plan_migrate_item", label=target, ref=target_ref))
         lines.append(t("plan_promote_item", source=source, target=target))
 
     return "\n".join(lines)
