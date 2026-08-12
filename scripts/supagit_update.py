@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TextIO
 
 from supagit_i18n import t
 from supagit_situation import SyncStatus, classify_sync_counts
@@ -165,15 +166,23 @@ def needs_update(source_root: Path) -> bool:
     return status == SyncStatus.BEHIND_ONLY
 
 
-def pull_and_reinstall(source_root: Path, *, lang: str = "en") -> None:
+def pull_and_reinstall(
+    source_root: Path, *, lang: str = "en", progress: TextIO | None = None
+) -> None:
+    def _progress(message: str) -> None:
+        if progress is not None:
+            print(message, file=progress, flush=True)
+
     assert_github_source(source_root)
     status = ensure_self_update_allowed(source_root)
     if status != SyncStatus.BEHIND_ONLY:
         return
+    _progress("[supagit] git pull --ff-only origin main…")
     _run(source_root, "git", "pull", "--ff-only", DEFAULT_REMOTE, DEFAULT_BRANCH)
     installer = source_root / "scripts" / "install-supagit-global.sh"
     if not installer.is_file():
         raise UpdateError(f"installer missing: {installer}")
+    _progress(f"[supagit] install-supagit-global.sh --lang {lang}…")
     _run_installer(source_root, installer, lang)
 
 

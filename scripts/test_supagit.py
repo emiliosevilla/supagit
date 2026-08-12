@@ -712,25 +712,21 @@ class WelcomeAndBusyTests(unittest.TestCase):
         self.assertIn(MODULE.GREEN, output)
         self.assertNotIn(MODULE.CYAN, output)
 
-    def test_main_update_uses_spinner_while_reinstalling(self) -> None:
+    def test_main_update_reinstalls_and_reexecs(self) -> None:
         source = Path("/tmp/supagit-source")
         with patch.object(MODULE, "needs_skip_update", return_value=False):
             with patch.object(MODULE.supagit_update, "source_root_from_marker", return_value=source):
                 with patch.object(MODULE.supagit_update, "needs_update", return_value=True):
                     with patch.object(MODULE.supagit_update, "pull_and_reinstall") as pull:
-                        with patch.object(MODULE, "BusySpinner") as spinner_cls:
-                            spinner_cls.return_value.__enter__.return_value = None
-                            spinner_cls.return_value.__exit__.return_value = None
-                            with patch("os.execve", side_effect=SystemExit(0)) as execve:
-                                with patch("builtins.print"):
-                                    with self.assertRaises(SystemExit):
-                                        MODULE.main(["--lang", "en", "--yes", "--no-sweep"])
-        spinner_cls.assert_called()
-        kwargs = spinner_cls.call_args.kwargs
-        self.assertIn("enabled", kwargs)
-        self.assertIsInstance(kwargs["enabled"], bool)
-        self.assertEqual(kwargs.get("delay_s"), 0.0)
-        pull.assert_called_once_with(source, lang="en")
+                        with patch("os.execve", side_effect=SystemExit(0)) as execve:
+                            with patch("builtins.print"):
+                                with self.assertRaises(SystemExit):
+                                    MODULE.main(["--lang", "en", "--yes", "--no-sweep"])
+        pull.assert_called_once()
+        args, kwargs = pull.call_args
+        self.assertEqual(args[0], source)
+        self.assertEqual(kwargs.get("lang"), "en")
+        self.assertIs(kwargs.get("progress"), MODULE.sys.stderr)
         execve.assert_called_once()
 
 

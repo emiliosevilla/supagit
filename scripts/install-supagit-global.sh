@@ -47,7 +47,9 @@ case "${lang}" in
     case "$env_lang" in
       en|es) lang=$env_lang ;;
       "")
-        if [ -t 0 ]; then
+        # Require stdout TTY too: Python auto-update captures stdout (PIPE) and
+        # must not block on a hidden language menu while a spinner runs.
+        if [ -t 0 ] && [ -t 1 ]; then
           while :; do
             printf '%s' "Language / Idioma:
   (1) English

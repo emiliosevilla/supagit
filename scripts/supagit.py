@@ -1850,9 +1850,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if supagit_update.needs_update(source):
                     print("[supagit] Update available; pulling and reinstalling… / Hay actualización…")
                     update_lang = supagit_update.resolve_update_lang(raw_argv)
-                    spinner_enabled = colour_enabled("auto", sys.stderr)
-                    with BusySpinner(enabled=spinner_enabled, delay_s=0.0):
-                        supagit_update.pull_and_reinstall(source, lang=update_lang)
+                    supagit_update.pull_and_reinstall(
+                        source, lang=update_lang, progress=sys.stderr
+                    )
                     print("[supagit] Update installed; restarting… / Actualización instalada; reiniciando…")
                     env = os.environ.copy()
                     env[supagit_update.SKIP_ENV] = "1"
