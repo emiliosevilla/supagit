@@ -195,6 +195,16 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "update_found": "[supagit] Update available; pulling and reinstalling…",
         "update_done_reexec": "[supagit] Update installed; restarting…",
         "update_failed": "Could not update supagit from GitHub: {detail}",
+        "update_healing_source": (
+            "[supagit] Source clone missing or unhealthy; refreshing into {path}…"
+        ),
+        "update_healing_reinstall": (
+            "[supagit] Reinstalling global skill from the refreshed source (--lang {lang})…"
+        ),
+        "update_clone_failed": (
+            "Could not clone https://github.com/emiliosevilla/supagit into the "
+            "managed source directory: {detail}"
+        ),
         "error_self_update_diverged": (
             "The registered supagit source clone at {path} has diverged from "
             "{remote}/{branch}. Do not auto-update; reconcile manually, for example:\n"
@@ -562,6 +572,16 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "update_found": "[supagit] Hay actualización; descargando y reinstalando…",
         "update_done_reexec": "[supagit] Actualización instalada; reiniciando…",
         "update_failed": "No se pudo actualizar supagit desde GitHub: {detail}",
+        "update_healing_source": (
+            "[supagit] Clon fuente ausente o dañado; refrescando en {path}…"
+        ),
+        "update_healing_reinstall": (
+            "[supagit] Reinstalando la skill global desde la fuente refrescada (--lang {lang})…"
+        ),
+        "update_clone_failed": (
+            "No se pudo clonar https://github.com/emiliosevilla/supagit en el "
+            "directorio de fuente gestionado: {detail}"
+        ),
         "error_self_update_diverged": (
             "El clon source-root de supagit en {path} ha divergido de "
             "{remote}/{branch}. No se actualiza automáticamente; reconcílialo a mano, "

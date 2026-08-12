@@ -1930,23 +1930,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("[supagit] Checking for updates… / Comprobando actualizaciones…")
         try:
             if not needs_skip_update():
-                source = supagit_update.source_root_from_marker()
-                if source is None:
-                    candidate = _SCRIPT_DIR.parent
-                    if (candidate / "scripts" / "install-supagit-global.sh").is_file():
-                        source = candidate
-                if source is None:
-                    raise ShipError(
-                        "Cannot locate the registered supagit source-root clone. "
-                        "Re-run scripts/install-supagit-global.sh from a clone of "
-                        "https://github.com/emiliosevilla/supagit.git"
-                    )
+                update_lang = supagit_update.resolve_update_lang(raw_argv)
+                source = supagit_update.ensure_healthy_source_root(
+                    lang=update_lang, progress=sys.stderr
+                )
+                repaired = bool(
+                    getattr(supagit_update.ensure_healthy_source_root, "repaired", False)
+                )
                 if supagit_update.needs_update(source):
                     print("[supagit] Update available; pulling and reinstalling… / Hay actualización…")
-                    update_lang = supagit_update.resolve_update_lang(raw_argv)
                     supagit_update.pull_and_reinstall(
                         source, lang=update_lang, progress=sys.stderr
                     )
+                    repaired = True
+                if repaired:
                     print("[supagit] Update installed; restarting… / Actualización instalada; reiniciando…")
                     env = os.environ.copy()
                     env[supagit_update.SKIP_ENV] = "1"

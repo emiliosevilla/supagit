@@ -650,6 +650,107 @@ class I18nAndUpdateTests(unittest.TestCase):
             [(source, source / "scripts" / "install-supagit-global.sh", "es")],
         )
 
+    def test_missing_marker_or_source_recreates_clone(self) -> None:
+        update = MODULE.supagit_update
+        installer_calls: list[tuple] = []
+
+        def fake_clone(dest: Path, **_kwargs) -> None:
+            scripts = dest / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "install-supagit-global.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (scripts / "supagit.py").write_text("# fake\n", encoding="utf-8")
+
+        def fake_installer(cwd, installer, lang):
+            installer_calls.append((Path(cwd), Path(installer), lang))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            managed = (home / ".supagit" / "source").resolve()
+            with patch.object(update, "_shallow_clone_github", side_effect=fake_clone) as clone:
+                with patch.object(update, "_run_installer", side_effect=fake_installer):
+                    result = update.ensure_healthy_source_root(home=home, lang="es")
+            clone.assert_called_once()
+            self.assertEqual(result, managed)
+            marker = home / ".agents" / "skills" / "supagit" / "source-root"
+            self.assertTrue(marker.is_file())
+            self.assertEqual(marker.read_text(encoding="utf-8").strip(), str(managed))
+            self.assertEqual(
+                installer_calls,
+                [(managed, managed / "scripts" / "install-supagit-global.sh", "es")],
+            )
+            self.assertTrue(update.ensure_healthy_source_root.repaired)
+
+    def test_diverged_source_resets_or_recreates(self) -> None:
+        update = MODULE.supagit_update
+        clone_calls: list[Path] = []
+
+        def fake_clone(dest: Path, **_kwargs) -> None:
+            clone_calls.append(dest.resolve())
+            scripts = dest / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "install-supagit-global.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (scripts / "supagit.py").write_text("# fake\n", encoding="utf-8")
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "1\t1"
+            raise AssertionError(cmd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            bad = home / "old-clone"
+            bad.mkdir()
+            (bad / "scripts").mkdir()
+            (bad / "scripts" / "install-supagit-global.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            marker_dir = home / ".agents" / "skills" / "supagit"
+            marker_dir.mkdir(parents=True)
+            (marker_dir / "source-root").write_text(f"{bad}\n", encoding="utf-8")
+            managed = (home / ".supagit" / "source").resolve()
+            with patch.object(update, "_run", side_effect=fake_run):
+                with patch.object(update, "_shallow_clone_github", side_effect=fake_clone):
+                    with patch.object(update, "_run_installer"):
+                        result = update.ensure_healthy_source_root(home=home, lang="en")
+            self.assertEqual(result, managed)
+            self.assertEqual(clone_calls, [managed])
+            self.assertEqual(
+                (marker_dir / "source-root").read_text(encoding="utf-8").strip(),
+                str(managed),
+            )
+            self.assertTrue(update.ensure_healthy_source_root.repaired)
+
+    def test_deleted_source_directory_recovers(self) -> None:
+        update = MODULE.supagit_update
+
+        def fake_clone(dest: Path, **_kwargs) -> None:
+            scripts = dest / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "install-supagit-global.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (scripts / "supagit.py").write_text("# fake\n", encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            missing = home / "gone-clone"
+            marker_dir = home / ".agents" / "skills" / "supagit"
+            marker_dir.mkdir(parents=True)
+            (marker_dir / "source-root").write_text(f"{missing}\n", encoding="utf-8")
+            managed = (home / ".supagit" / "source").resolve()
+            with patch.object(update, "_shallow_clone_github", side_effect=fake_clone) as clone:
+                with patch.object(update, "_run_installer"):
+                    result = update.ensure_healthy_source_root(home=home, lang="en")
+            clone.assert_called_once()
+            self.assertEqual(result, managed)
+            self.assertFalse(missing.exists())
+            self.assertEqual(
+                (marker_dir / "source-root").read_text(encoding="utf-8").strip(),
+                str(managed),
+            )
+            self.assertTrue(update.ensure_healthy_source_root.repaired)
+
     def test_needs_skip_update_env(self) -> None:
         with patch.dict(os.environ, {MODULE.supagit_update.SKIP_ENV: "1"}):
             self.assertTrue(MODULE.needs_skip_update())
@@ -715,13 +816,19 @@ class WelcomeAndBusyTests(unittest.TestCase):
     def test_main_update_reinstalls_and_reexecs(self) -> None:
         source = Path("/tmp/supagit-source")
         with patch.object(MODULE, "needs_skip_update", return_value=False):
-            with patch.object(MODULE.supagit_update, "source_root_from_marker", return_value=source):
+            with patch.object(
+                MODULE.supagit_update,
+                "ensure_healthy_source_root",
+                return_value=source,
+            ) as ensure:
+                ensure.repaired = False
                 with patch.object(MODULE.supagit_update, "needs_update", return_value=True):
                     with patch.object(MODULE.supagit_update, "pull_and_reinstall") as pull:
                         with patch("os.execve", side_effect=SystemExit(0)) as execve:
                             with patch("builtins.print"):
                                 with self.assertRaises(SystemExit):
                                     MODULE.main(["--lang", "en", "--yes", "--no-sweep"])
+        ensure.assert_called_once()
         pull.assert_called_once()
         args, kwargs = pull.call_args
         self.assertEqual(args[0], source)

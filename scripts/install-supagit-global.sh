@@ -225,6 +225,24 @@ if [ -f "$global_skill_dir/source-root" ]; then
     source_marker_needs_install=false
   fi
 fi
+# Prefer the managed self-heal clone when the marker is missing or unusable.
+if [ -z "$global_source_root" ]; then
+  managed_source_root="${HOME}/.supagit/source"
+  if [ -x "$managed_source_root/scripts/install-supagit-global.sh" ] \
+    && [ -f "$managed_source_root/scripts/supagit.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit_layout.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit_inventory.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit_menu.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit_sweep.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit_i18n.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit_update.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit_busy.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit_situation.py" ] \
+    && [ -f "$managed_source_root/scripts/supagit" ] \
+    && [ -f "$managed_source_root/docs/supagit-agent-command.md" ]; then
+    global_source_root=$managed_source_root
+  fi
+fi
 if [ -z "$global_source_root" ] \
   && [ -f "scripts/install-supagit-global.sh" ] \
   && [ -f "scripts/supagit.py" ]; then
