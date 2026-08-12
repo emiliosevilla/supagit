@@ -739,7 +739,6 @@ def integrate_branch(
         title = f"supagit: integrate {branch} into {base}"
         pr_number = gh.create_pr(branch, base, title)
 
-<<<<<<< Updated upstream
     mergeable = gh.pr_mergeable(pr_number)
     if mergeable == "CONFLICTING":
         raise SweepError(
@@ -751,10 +750,7 @@ def integrate_branch(
             )
         )
 
-    gh.merge_pr(pr_number)
-=======
     gh.merge_pr(pr_number, admin=True)
->>>>>>> Stashed changes
 
     if dry_run:
         return
