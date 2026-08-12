@@ -316,6 +316,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "{branch} is already checked out in another worktree: {path}. "
             "Run supagit from there, or close that worktree with: git worktree remove {path}"
         ),
+        "adopt_first_branch_worktree": (
+            "{branch} is already checked out in {path}; continuing from that worktree."
+        ),
         "error_detached_unreachable": (
             "HEAD is detached at {sha} and that commit is not on any branch; "
             "moving the checkout would lose it. Save it first by creating a branch, "
@@ -664,6 +667,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "{branch} ya está abierta en otro worktree: {path}. "
             "Ejecuta supagit desde allí, o cierra ese worktree con: git worktree remove {path}"
         ),
+        "adopt_first_branch_worktree": (
+            "{branch} ya está abierta en {path}; continúo desde ese worktree."
+        ),
         "error_detached_unreachable": (
             "HEAD está desacoplado en {sha} y ese commit no está en ninguna rama; "
             "mover el checkout lo perdería. Guárdalo primero creando una rama, "
@@ -721,9 +727,12 @@ def set_lang(lang: str) -> None:
 def t(key: str, **kwargs: object) -> str:
     catalog = _MESSAGES.get(_lang) or _MESSAGES["en"]
     template = catalog.get(key) or _MESSAGES["en"].get(key) or key
-    if kwargs:
+    if not kwargs:
+        return template
+    try:
         return template.format(**kwargs)
-    return template
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"i18n key {key!r} failed to format: {exc}") from exc
 
 
 def resolve_lang_from_env_and_args(lang_arg: str | None, *, yes: bool, stdin_isatty: bool) -> str | None:

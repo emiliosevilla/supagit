@@ -267,14 +267,18 @@ class Pipeline:
         self.options = options
         self.layout = self._resolve_layout()
         self.launch_root = self.layout.launch_root
-        self.root = self.layout.main_root
+        self.main_root = self.layout.main_root
+        self.root = self.main_root
         self._branch_check_on_main = self.layout.is_linked_launch
         self.config = self._load_config()
         self.remote = self.config.get("remote", "origin")
         self.backend = self._resolve_backend()
         self.cli = self.backend.cli
         self.linked_ref: str | None = None
-        self.original_branch = self.git("branch", "--show-current", capture=True).strip()
+        # Measure the launch checkout (linked worktree or main), not always main_root.
+        self.original_branch = self.git(
+            "branch", "--show-current", capture=True, cwd=self.launch_root
+        ).strip()
         self.project_name = self._project_name()
         self.branches = self._resolve_branches()
         self.dev = self.branches[0]
@@ -795,11 +799,11 @@ class Pipeline:
 
     def announce_launch_checkout(self) -> None:
         current = self.git(
-            "branch", "--show-current", capture=True, cwd=self.root
+            "branch", "--show-current", capture=True, cwd=self.launch_root
         ).strip()
         if not current:
             sha = self.git(
-                "rev-parse", "--short", "HEAD", capture=True, cwd=self.root
+                "rev-parse", "--short", "HEAD", capture=True, cwd=self.launch_root
             ).strip()
             current = t("detached_label", sha=sha or "HEAD")
         self.explain(t("startup_any_branch", branch=current))
@@ -820,6 +824,11 @@ class Pipeline:
             ask_continue=False,
         )
         if not self.ask_yes_no(t("confirm_return", branch=start), default_yes=True):
+            return
+        start_cwd = self._cwd_for_branch(start)
+        if start_cwd.resolve() != self.root.resolve():
+            # Start branch already lives in another worktree — nothing to switch here.
+            self.status(t("return_done", branch=start), self.GREEN)
             return
         status = self.git("status", "--porcelain", capture=True, cwd=self.root)
         if status.strip():
@@ -1167,10 +1176,24 @@ class Pipeline:
 
     def _promote_direct(self, source: str, target: str) -> None:
         self.fetch_branch(target)
-        self.git("checkout", target, mutating=True)
+        target_cwd = self._cwd_for_branch(target)
+        current = self.git(
+            "branch", "--show-current", capture=True, cwd=target_cwd
+        ).strip()
+        if current != target:
+            locked = self._worktree_path_for_branch(target)
+            if locked is not None and locked != target_cwd.resolve():
+                raise ShipError(
+                    t(
+                        "error_first_branch_in_worktree",
+                        branch=target,
+                        path=str(locked),
+                    )
+                )
+            self.git("checkout", target, mutating=True, cwd=target_cwd)
         try:
-            self.git("merge", source, "--no-edit", mutating=True)
-            self.git("push", self.remote, target, mutating=True)
+            self.git("merge", source, "--no-edit", mutating=True, cwd=target_cwd)
+            self.git("push", self.remote, target, mutating=True, cwd=target_cwd)
         except Exception:
             print(
                 colour_text(
@@ -1244,14 +1267,28 @@ class Pipeline:
         )
 
     def return_to_dev(self) -> None:
-        if self.options.dry_run:
-            self.git("checkout", self.dev, mutating=True)
+        # Prefer the worktree that already holds pipeline[0] (common with linked launches).
+        held = self._worktree_path_for_branch(self.dev)
+        if held is not None:
+            self.root = held
             return
-        current = self.git("branch", "--show-current", capture=True).strip()
+        if self.options.dry_run:
+            self.git("checkout", self.dev, mutating=True, cwd=self.main_root)
+            self.root = self.main_root
+            return
+        current = self.git(
+            "branch", "--show-current", capture=True, cwd=self.main_root
+        ).strip()
         if current != self.dev:
-            merge_head = self.root / ".git" / "MERGE_HEAD"
+            merge_path = self.git(
+                "rev-parse", "--git-path", "MERGE_HEAD", capture=True, cwd=self.main_root
+            ).strip()
+            merge_head = Path(merge_path)
+            if not merge_head.is_absolute():
+                merge_head = self.main_root / merge_head
             if not merge_head.exists():
-                self.git("checkout", self.dev, mutating=True)
+                self.git("checkout", self.dev, mutating=True, cwd=self.main_root)
+        self.root = self.main_root
 
     def _backend_target_for_branch(self, branch: str, index: int) -> str | None:
         if self.backend.provider != "supabase":
@@ -1512,17 +1549,40 @@ class Pipeline:
             lines.append(t("error_dirty_reposition_more", count=remaining))
         return "\n".join(lines)
 
-    def _first_branch_worktree(self) -> Path | None:
+    def _worktree_path_for_branch(self, branch: str) -> Path | None:
         porcelain = self.git(
-            "worktree", "list", "--porcelain", capture=True, cwd=self.root
+            "worktree", "list", "--porcelain", capture=True, cwd=self.main_root
         )
         for entry in supagit_inventory.parse_worktree_porcelain(porcelain):
-            if entry.get("branch") != self.dev:
+            if entry.get("branch") != branch:
                 continue
-            path = Path(str(entry["path"])).resolve()
-            if path != self.root.resolve():
-                return path
+            return Path(str(entry["path"])).resolve()
         return None
+
+    def _first_branch_worktree(self) -> Path | None:
+        """Return another worktree that already has pipeline[0], if any."""
+        held = self._worktree_path_for_branch(self.dev)
+        if held is None:
+            return None
+        if held == self.root.resolve():
+            return None
+        return held
+
+    def _cwd_for_branch(self, branch: str) -> Path:
+        """Worktree where ``branch`` is checked out, else the main checkout."""
+        held = self._worktree_path_for_branch(branch)
+        return held if held is not None else self.main_root
+
+    def _adopt_first_branch_worktree(self, path: Path) -> None:
+        self.root = path.resolve()
+        self.explain(
+            t(
+                "adopt_first_branch_worktree",
+                branch=self.dev,
+                path=str(self.root),
+            ),
+            ask_continue=False,
+        )
 
     def _ensure_first_branch_ref(self) -> None:
         local_ref = f"refs/heads/{self.dev}"
@@ -1530,7 +1590,7 @@ class Pipeline:
 
         def verifies(ref: str) -> bool:
             try:
-                self.git("rev-parse", "--verify", ref, capture=True, cwd=self.root)
+                self.git("rev-parse", "--verify", ref, capture=True, cwd=self.main_root)
                 return True
             except ShipError:
                 return False
@@ -1542,11 +1602,15 @@ class Pipeline:
             self.remote,
             f"refs/heads/{self.dev}:refs/remotes/{self.remote}/{self.dev}",
             mutating=True,
-            cwd=self.root,
+            cwd=self.main_root,
         )
 
     def ensure_checkout_on_first_branch(self) -> str | None:
-        """Move to pipeline[0]. Return feature name if a pre-move commit was made."""
+        """Move to pipeline[0]. Return feature name if a pre-move commit was made.
+
+        When pipeline[0] is already checked out in a linked worktree, adopt that
+        worktree instead of failing — Git forbids the same branch in two worktrees.
+        """
         current = self.git(
             "branch", "--show-current", capture=True, cwd=self.root
         ).strip()
@@ -1554,14 +1618,6 @@ class Pipeline:
             return None
 
         other = self._first_branch_worktree()
-        if other is not None:
-            raise ShipError(
-                t(
-                    "error_first_branch_in_worktree",
-                    branch=self.dev,
-                    path=other,
-                )
-            )
 
         current_label = current
         if current == "":
@@ -1607,6 +1663,10 @@ class Pipeline:
                             files=self._format_dirty_paths(status),
                         )
                     )
+
+        if other is not None:
+            self._adopt_first_branch_worktree(other)
+            return committed_on
 
         self._ensure_first_branch_ref()
         self.tutor_confirm(

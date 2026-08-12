@@ -1498,7 +1498,7 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.verify_final_checkout = lambda: None  # type: ignore[method-assign]
         pipeline.sweep_features = sweep_features  # type: ignore[method-assign]
         pipeline.ff_sync_first_branch = lambda: None  # type: ignore[method-assign]
-        pipeline.commit_and_publish_dev = lambda: None  # type: ignore[method-assign]
+        pipeline.commit_and_publish_dev = lambda **_k: None  # type: ignore[method-assign]
         pipeline._assert_dev_synced = lambda: None  # type: ignore[method-assign]
         pipeline.run_checks = lambda: None  # type: ignore[method-assign]
         pipeline.validate_clean_after_checks = lambda: None  # type: ignore[method-assign]
@@ -1550,6 +1550,7 @@ class OrchestrationTests(unittest.TestCase):
             is_linked_launch=linked,
         )
         pipeline.launch_root = pipeline.layout.launch_root
+        pipeline.main_root = root
         pipeline.root = root
         pipeline.dev = "main"
         pipeline.branches = ("main",)
@@ -1970,20 +1971,22 @@ class OrchestrationTests(unittest.TestCase):
         )
         self.assertEqual(order[-1], "verify_final_checkout")
 
-    def test_first_branch_in_other_worktree_refused(self) -> None:
+    def test_first_branch_in_other_worktree_adopts(self) -> None:
         porcelain = (
             "worktree /repo\nbranch refs/heads/feature/x\n\n"
             "worktree /wt-main\nbranch refs/heads/main\n"
         )
-        pipeline, calls, _ = self._pipeline_for_reposition(
+        pipeline, calls, explained = self._pipeline_for_reposition(
             current="feature/x",
             worktree_porcelain=porcelain,
             yes=True,
         )
-        with self.assertRaises(ENGINE.ShipError) as ctx:
-            pipeline.ensure_checkout_on_first_branch()
-        self.assertIn("/wt-main", str(ctx.exception))
+        pipeline.main_root = Path("/repo")
+        committed = pipeline.ensure_checkout_on_first_branch()
+        self.assertIsNone(committed)
+        self.assertEqual(pipeline.root, Path("/wt-main").resolve())
         self.assertFalse(any(c[0] == "checkout" for c in calls))
+        self.assertTrue(any("wt-main" in e for e in explained))
 
     def test_first_branch_worktree_at_root_ok(self) -> None:
         porcelain = "worktree /repo\nbranch refs/heads/main\n"
@@ -2031,6 +2034,7 @@ class OrchestrationTests(unittest.TestCase):
             color="never",
         )
         pipeline.root = Path("/repo")
+        pipeline.launch_root = Path("/repo")
         explained: list[str] = []
 
         def git(*args, **kwargs):
@@ -2055,6 +2059,7 @@ class OrchestrationTests(unittest.TestCase):
             color="never",
         )
         pipeline.root = Path("/repo")
+        pipeline.main_root = Path("/repo")
         pipeline.dev = "dev"
         pipeline.original_branch = "feature/x"
         pipeline.GREEN = ""
@@ -2063,6 +2068,8 @@ class OrchestrationTests(unittest.TestCase):
 
         def git(*args, **kwargs):
             calls.append(args)
+            if args[:2] == ("worktree", "list"):
+                return "worktree /repo\nbranch refs/heads/dev\n"
             if args[:2] == ("status", "--porcelain"):
                 return ""
             if args[0] == "checkout":
@@ -2411,7 +2418,7 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.ensure_checkout_on_first_branch = lambda: None  # type: ignore[method-assign]
         pipeline.validate_pipeline_head = lambda: None  # type: ignore[method-assign]
         pipeline.ff_sync_first_branch = lambda: None  # type: ignore[method-assign]
-        pipeline.commit_and_publish_dev = lambda: None  # type: ignore[method-assign]
+        pipeline.commit_and_publish_dev = lambda **_k: None  # type: ignore[method-assign]
         pipeline._assert_dev_synced = lambda: None  # type: ignore[method-assign]
         pipeline.run_checks = lambda: None  # type: ignore[method-assign]
         pipeline.validate_clean_after_checks = lambda: None  # type: ignore[method-assign]
