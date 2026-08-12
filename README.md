@@ -229,6 +229,9 @@ the correct worktree (or via ref update without checking them out onto
 `pipeline[0]`) before opening a PR. If the remote feature branch was deleted
 (common after a merged PR), integrate skips that ff and pushes the local branch
 to recreate it. Empty `base..head` ranges are refused before `gh pr create`.
+Feature integrates merge with `gh pr merge --merge --admin` so protected
+`pipeline[0]` rules do not block the sweeper; promotion PRs still never use
+`--admin`.
 
 Phase order after plan Confirm:
 

@@ -562,6 +562,20 @@ class GhClientTests(unittest.TestCase):
             ["gh", "pr", "merge", "42", "--merge", "--delete-branch"],
         )
 
+    def test_merge_pr_admin_flag(self) -> None:
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            return ""
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        client.merge_pr(22, admin=True, delete_branch=True)
+        self.assertEqual(
+            calls[0],
+            ["gh", "pr", "merge", "22", "--merge", "--admin", "--delete-branch"],
+        )
+
     def test_merge_pr_can_keep_head_branch(self) -> None:
         calls: list[list[str]] = []
 
