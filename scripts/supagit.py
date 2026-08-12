@@ -1849,16 +1849,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 if supagit_update.needs_update(source):
                     print("[supagit] Update available; pulling and reinstalling… / Hay actualización…")
+                    update_lang = supagit_update.resolve_update_lang(raw_argv)
                     spinner_enabled = colour_enabled("auto", sys.stderr)
                     with BusySpinner(enabled=spinner_enabled, delay_s=0.0):
-                        supagit_update.pull_and_reinstall(source)
+                        supagit_update.pull_and_reinstall(source, lang=update_lang)
                     print("[supagit] Update installed; restarting… / Actualización instalada; reiniciando…")
                     env = os.environ.copy()
                     env[supagit_update.SKIP_ENV] = "1"
                     script = Path(__file__).resolve()
                     os.execve(sys.executable, [sys.executable, str(script), *raw_argv], env)
                 else:
-                    print("[supagit] Already on the latest supagit (origin/main).")
+                    print("[supagit] Already on the latest supagit (origin/main). [build: 2026-08-12]")
         except ShipError:
             raise
         except supagit_update.UpdateError as exc:

@@ -50,6 +50,46 @@ def _run(cwd: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
+def resolve_update_lang(argv: list[str] | None = None) -> str:
+    """Pick install language before argparse runs (non-interactive self-update)."""
+    if argv:
+        index = 0
+        while index < len(argv):
+            arg = argv[index]
+            if arg in ("--lang", "-l") and index + 1 < len(argv):
+                value = argv[index + 1].strip().lower()
+                if value in ("en", "es"):
+                    return value
+                index += 2
+                continue
+            if arg.startswith("--lang="):
+                value = arg.split("=", 1)[1].strip().lower()
+                if value in ("en", "es"):
+                    return value
+            index += 1
+    env = os.environ.get("SUPAGIT_LANG", "").strip().lower()
+    if env in ("en", "es"):
+        return env
+    return "en"
+
+
+def _run_installer(cwd: Path, installer: Path, lang: str) -> None:
+    """Run the global installer without blocking on an interactive language menu."""
+    if lang not in ("en", "es"):
+        lang = "en"
+    completed = subprocess.run(
+        ["sh", str(installer), "--lang", lang],
+        cwd=str(cwd),
+        stdin=subprocess.DEVNULL,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "command failed").strip()
+        raise UpdateError(f"sh {installer} --lang {lang}: {detail}")
+
+
 def assert_github_source(source_root: Path) -> None:
     url = _run(source_root, "git", "remote", "get-url", DEFAULT_REMOTE)
     normalised = url.replace(":", "/").lower()
@@ -125,7 +165,7 @@ def needs_update(source_root: Path) -> bool:
     return status == SyncStatus.BEHIND_ONLY
 
 
-def pull_and_reinstall(source_root: Path) -> None:
+def pull_and_reinstall(source_root: Path, *, lang: str = "en") -> None:
     assert_github_source(source_root)
     status = ensure_self_update_allowed(source_root)
     if status != SyncStatus.BEHIND_ONLY:
@@ -134,7 +174,7 @@ def pull_and_reinstall(source_root: Path) -> None:
     installer = source_root / "scripts" / "install-supagit-global.sh"
     if not installer.is_file():
         raise UpdateError(f"installer missing: {installer}")
-    _run(source_root, "sh", str(installer))
+    _run_installer(source_root, installer, lang)
 
 
 def maybe_self_update_and_reexec(argv: list[str]) -> None:
@@ -151,7 +191,7 @@ def maybe_self_update_and_reexec(argv: list[str]) -> None:
             raise UpdateError("no_source")
     if not needs_update(source):
         return
-    pull_and_reinstall(source)
+    pull_and_reinstall(source, lang=resolve_update_lang(argv))
     env = os.environ.copy()
     env[SKIP_ENV] = "1"
     script = Path(__file__).resolve().parent / "supagit.py"

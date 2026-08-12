@@ -608,6 +608,48 @@ class I18nAndUpdateTests(unittest.TestCase):
         self.assertIn("diverged", str(ctx.exception).lower())
         self.assertNotIn("pull", str(ctx.exception).lower())
 
+    def test_resolve_update_lang_from_argv_and_env(self) -> None:
+        update = MODULE.supagit_update
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(update.resolve_update_lang(["--lang", "es"]), "es")
+            self.assertEqual(update.resolve_update_lang(["--lang=EN"]), "en")
+            self.assertEqual(update.resolve_update_lang([]), "en")
+        with patch.dict(os.environ, {"SUPAGIT_LANG": "es"}, clear=True):
+            self.assertEqual(update.resolve_update_lang([]), "es")
+            self.assertEqual(update.resolve_update_lang(["--lang", "en"]), "en")
+
+    def test_pull_and_reinstall_runs_installer_with_lang(self) -> None:
+        update = MODULE.supagit_update
+        installer_calls: list[tuple] = []
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "fetch"]:
+                return ""
+            if "rev-list" in cmd:
+                return "1\t0"
+            if cmd[:2] == ["git", "pull"]:
+                return ""
+            raise AssertionError(cmd)
+
+        def fake_installer(cwd, installer, lang):
+            installer_calls.append((cwd, installer, lang))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)
+            scripts = source / "scripts"
+            scripts.mkdir()
+            (scripts / "install-supagit-global.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            with patch.object(update, "_run", side_effect=fake_run):
+                with patch.object(update, "_run_installer", side_effect=fake_installer):
+                    update.pull_and_reinstall(source, lang="es")
+        self.assertEqual(
+            installer_calls,
+            [(source, source / "scripts" / "install-supagit-global.sh", "es")],
+        )
+
     def test_needs_skip_update_env(self) -> None:
         with patch.dict(os.environ, {MODULE.supagit_update.SKIP_ENV: "1"}):
             self.assertTrue(MODULE.needs_skip_update())
@@ -688,7 +730,7 @@ class WelcomeAndBusyTests(unittest.TestCase):
         self.assertIn("enabled", kwargs)
         self.assertIsInstance(kwargs["enabled"], bool)
         self.assertEqual(kwargs.get("delay_s"), 0.0)
-        pull.assert_called_once_with(source)
+        pull.assert_called_once_with(source, lang="en")
         execve.assert_called_once()
 
 
