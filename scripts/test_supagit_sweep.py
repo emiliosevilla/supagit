@@ -1452,10 +1452,57 @@ class OrchestrationTests(unittest.TestCase):
             current="feature/x",
             dirty=" M a.txt\n?? b.txt\n",
         )
-        pipeline.ensure_checkout_on_first_branch()
+        committed = pipeline.ensure_checkout_on_first_branch()
+        self.assertEqual(committed, "feature/x")
         self.assertTrue(any(c[0] == "add" for c in calls))
         self.assertTrue(any(c[0] == "commit" for c in calls))
         self.assertIn(("checkout", "main"), calls)
+
+    def test_extend_integrate_after_pre_commit_when_not_contained(self) -> None:
+        pipeline, _, _ = self._pipeline_for_reposition(
+            current="work", yes=True
+        )
+        pipeline.dev = "main"
+        pipeline.options.no_sweep = False
+        selection = supagit_menu.MenuSelection(integrate=(), pipeline=("main",))
+
+        def contained(needle: str, haystack: str, git_runner) -> bool:
+            self.assertEqual(needle, "work")
+            self.assertEqual(haystack, "main")
+            return False
+
+        with patch.object(supagit_inventory, "branch_contained", side_effect=contained):
+            updated = pipeline._extend_integrate_after_pre_commit(selection, "work")
+        self.assertEqual(updated.integrate, ("work",))
+
+    def test_extend_integrate_skips_when_still_contained(self) -> None:
+        pipeline, _, _ = self._pipeline_for_reposition(current="work", yes=True)
+        pipeline.dev = "main"
+        pipeline.options.no_sweep = False
+        selection = supagit_menu.MenuSelection(integrate=(), pipeline=("main",))
+        with patch.object(supagit_inventory, "branch_contained", return_value=True):
+            updated = pipeline._extend_integrate_after_pre_commit(selection, "work")
+        self.assertEqual(updated.integrate, ())
+
+    def test_extend_integrate_no_sweep_fails_closed(self) -> None:
+        pipeline, _, _ = self._pipeline_for_reposition(current="work", yes=True)
+        pipeline.dev = "main"
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message="x",
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        selection = supagit_menu.MenuSelection(integrate=(), pipeline=("main",))
+        with self.assertRaises(ENGINE.ShipError) as ctx:
+            pipeline._extend_integrate_after_pre_commit(selection, "work")
+        self.assertIn("--no-sweep", str(ctx.exception))
+        self.assertIn("work", str(ctx.exception))
 
     def test_ensure_checkout_dirty_on_first_branch_ok(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(

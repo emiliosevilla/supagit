@@ -220,6 +220,15 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "confirm_commit_before_reposition": (
             "Commit all current changes on {branch} so I can move to {target}?"
         ),
+        "integrate_after_pre_commit": (
+            "Committed new work on {branch} that is not yet in {base}; "
+            "I will integrate {branch} via pull request in this run."
+        ),
+        "error_pre_commit_needs_integrate": (
+            "Committed local changes on {branch}, but they are not in {base} and "
+            "--no-sweep skipped feature integration. Re-run without --no-sweep "
+            "(or pass --integrate {branch}) so those commits can be merged."
+        ),
         "final_checkout_mismatch": (
             "the run finished on {actual}, not on the expected {expected}. "
             "Nothing is pending on the remote; stay here or run supagit again from {expected}."
@@ -544,6 +553,15 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "confirm_commit_before_reposition": (
             "¿Confirmar todos los cambios actuales en {branch} para poder mover a {target}?"
+        ),
+        "integrate_after_pre_commit": (
+            "He confirmado trabajo nuevo en {branch} que aún no está en {base}; "
+            "integraré {branch} con una pull request en esta misma ejecución."
+        ),
+        "error_pre_commit_needs_integrate": (
+            "He confirmado cambios locales en {branch}, pero no están en {base} y "
+            "--no-sweep omitió la integración de features. Vuelve a ejecutar sin "
+            "--no-sweep (o pasa --integrate {branch}) para fusionar esos commits."
         ),
         "final_checkout_mismatch": (
             "la ejecución terminó en {actual}, no en {expected} como se esperaba. "
