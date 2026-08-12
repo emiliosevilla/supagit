@@ -203,22 +203,20 @@ questions (commit message, branch picks, etc.) are also **green** prompts.
 
 The menu has two labeled blocks:
 
-- **Independent work** — linked worktrees and other local feature branches.
-  Numbered `1.`, `2.`, … with checkmarks `[✓]`. Press Enter to integrate every
-  `[✓]` branch that is **not** already contained in the first pipeline branch;
-  type numbers (e.g. `1,3`), names, or `0` / `none` to skip. Branches already
-  contained stay `[✓]` with a note (“already included…”) so you see them, but
-  Enter does not open a new pull request for them.
-- **Main pipeline branches** — promotion order for this run. Shown with their
-  own numbers `1.`, `2.`, … (order matters; these numbers apply only to the
-  pipeline prompt). Press Enter for the configured default order, or enter
-  comma-separated numbers or branch names to reorder.
+- **Feature branches** — linked worktrees and other local features. Numbered
+  `1.`, `2.`, … with `[✓]`. Enter merges pending `[✓]` branches; type numbers
+  (e.g. `1,3`) or `0` to skip. Already-in-base stays `[✓]` with a short note
+  but Enter does not open a new PR. If there are none, the prompt is skipped.
+- **Release pipeline** — promotion order for this run. Own numbers `1.`, `2.`, …
+  (order matters). Enter keeps the configured default, or type numbers/names
+  to reorder. If only one pipeline branch exists, that prompt is skipped.
 
-After both prompts, `supagit` measures a **Situation** report (cyan preflight:
-sync findings and proposed cures such as publish-then-ff or feature
-fast-forward). Blocked cases (diverged histories, dirty feature behind upstream,
-empty PR) stop with actionable commands. Then a numbered **execution plan** is
-printed in cyan (including those cures), followed by a green confirmation
+Green prompts appear only when there is something to choose. Then `supagit`
+measures a **Situation** report (cyan preflight: sync findings and proposed
+cures such as publish-then-ff or feature fast-forward). Blocked cases
+(diverged histories, dirty feature behind upstream, empty PR) stop with
+actionable commands. Then a numbered **execution plan** is printed in cyan
+(including those cures), followed by a green confirmation
 (`[Y/n]` / `[S/n]`; Enter = yes).
 
 Selected features are integrated through GitHub pull requests merged into the

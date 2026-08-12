@@ -31,12 +31,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "commit_message_prompt": "Commit message for {branch}: ",
         "commit_message_empty": "The commit message cannot be empty.",
         "commit_message_yes": "With --yes, provide --message/-m for the initial {branch} commit.",
-        "pipeline_order_prompt": (
-            "Pipeline order (numbers/names, Enter = {default}): "
-        ),
+        "pipeline_order_prompt": "Order? Enter = {default}: ",
         "integrate_prompt": (
-            "Independent work to merge (numbers or names; Enter = all [✓] still needed; "
-            "0/none = skip): "
+            "Which features? Enter = pending [✓], or numbers / 0 to skip: "
         ),
         "confirm_plan": "Run these steps?",
         "explain_backend": (
@@ -89,23 +86,22 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "This runs the full release pipeline through: {chain}."
         ),
         "explain_integrate": (
-            "Optional: merge independent work into the first pipeline branch before publishing.\n"
-            "Each work branch is numbered. [✓] means selected by default for Enter.\n"
-            "Branches already included in the first pipeline branch stay [✓] with a note, "
-            "but Enter skips opening a new pull request for them.\n"
-            "Type numbers (for example 1,3), names, or 0/none to skip all."
+            "Merge feature branches into {base} with a pull request.\n"
+            "[✓] = selected if you press Enter. Already-in-{base} stays [✓] but is skipped."
         ),
         "explain_pipeline_order": (
-            "Choose which main branches to include and their order. "
-            "Numbers refer to the main-branches list above (not the work list)."
+            "Promotion path for this run (numbers from the pipeline list above)."
         ),
+        "explain_integrate_none": "No feature branches to merge into {base}.",
+        "explain_pipeline_single": "Pipeline for this run: {branch}.",
         "explain_plan": "Review the plan above.",
-        "menu_section_worktrees": "── Independent worktrees ──",
-        "menu_section_other_work": "── Other local work branches (no worktree) ──",
-        "menu_section_pipeline": "── Main local and remote repository branches ──",
+        "menu_section_worktrees": "── Feature branches (worktrees) ──",
+        "menu_section_other_work": "── Feature branches (local only) ──",
+        "menu_section_pipeline": "── Release pipeline ──",
+        "menu_section_work_empty": "(none — nothing to merge into {base})",
         "menu_check_on": "[✓]",
         "menu_check_off": "[ ]",
-        "menu_note_contained": "already included in {base} (no new PR on Enter)",
+        "menu_note_contained": "already in {base}",
         "menu_note_dirty": "(uncommitted changes)",
         "menu_note_worktree": "worktree: {path}",
         "plan_header": "This is what I will do:",
@@ -116,7 +112,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_commit_feature_item": "Commit local changes on {branch}",
         "plan_migrate_item": "Apply pending migrations to {label} ({ref})",
         "plan_promote_item": "Merge {source} into {target} and publish {target}",
-        "plan_none_integrate": "No independent work branches to integrate.",
+        "plan_none_integrate": "No feature branches to integrate.",
         "error_ff_dirty": (
             "Refusing fast-forward of {branch}: the worktree has uncommitted changes. "
             "Commit and publish them first (supagit publish phase), then re-run. "
@@ -378,12 +374,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "commit_message_prompt": "Mensaje de commit para {branch}: ",
         "commit_message_empty": "El mensaje de commit no puede estar vacío.",
         "commit_message_yes": "Con --yes, indica --message/-m para el commit inicial de {branch}.",
-        "pipeline_order_prompt": (
-            "Orden del pipeline (números/nombres, Enter = {default}): "
-        ),
+        "pipeline_order_prompt": "¿Orden? Enter = {default}: ",
         "integrate_prompt": (
-            "Trabajo independiente a fusionar (números o nombres; Enter = todos los [✓] "
-            "que aún hacen falta; 0/ninguno = omitir): "
+            "¿Qué features? Enter = pendientes [✓], o números / 0 para omitir: "
         ),
         "confirm_plan": "¿Ejecuto estos pasos?",
         "explain_backend": (
@@ -435,23 +428,22 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Esto ejecutará el pipeline completo de publicación: {chain}."
         ),
         "explain_integrate": (
-            "Opcional: fusionar trabajo independiente en la primera rama del pipeline antes de publicar.\n"
-            "Cada rama de trabajo tiene un número. [✓] = seleccionada por defecto con Enter.\n"
-            "Las ya incluidas en la primera rama del pipeline siguen con [✓] y una nota, "
-            "pero Enter no abre una pull request nueva para ellas.\n"
-            "Escribe números (por ejemplo 1,3), nombres, o 0/ninguno para omitir todo."
+            "Fusionar features en {base} con un pull request.\n"
+            "[✓] = seleccionadas si pulsas Enter. Las ya en {base} quedan [✓] pero se omiten."
         ),
         "explain_pipeline_order": (
-            "Elige qué ramas principales incluir y su orden. "
-            "Los números se refieren a la lista de ramas principales (no a la de trabajo)."
+            "Camino de promoción de esta ejecución (números de la lista de pipeline arriba)."
         ),
+        "explain_integrate_none": "No hay features que fusionar en {base}.",
+        "explain_pipeline_single": "Pipeline de esta ejecución: {branch}.",
         "explain_plan": "Revisa el plan anterior.",
-        "menu_section_worktrees": "── Worktrees independientes ──",
-        "menu_section_other_work": "── Otras ramas de trabajo locales (sin worktree) ──",
-        "menu_section_pipeline": "── Ramas principales del repositorio local y remoto ──",
+        "menu_section_worktrees": "── Features (worktrees) ──",
+        "menu_section_other_work": "── Features (solo locales) ──",
+        "menu_section_pipeline": "── Pipeline de release ──",
+        "menu_section_work_empty": "(ninguna — nada que fusionar en {base})",
         "menu_check_on": "[✓]",
         "menu_check_off": "[ ]",
-        "menu_note_contained": "ya incluida en {base} (Enter no abre PR nueva)",
+        "menu_note_contained": "ya en {base}",
         "menu_note_dirty": "(cambios sin commit)",
         "menu_note_worktree": "worktree: {path}",
         "plan_header": "Esto es lo que voy a hacer:",
@@ -462,7 +454,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_commit_feature_item": "Confirmar cambios locales en {branch}",
         "plan_migrate_item": "Aplicar migraciones pendientes a {label} ({ref})",
         "plan_promote_item": "Fusionar {source} en {target} y publicar {target}",
-        "plan_none_integrate": "No hay ramas de trabajo independientes que integrar.",
+        "plan_none_integrate": "No hay features que integrar.",
         "error_ff_dirty": (
             "Se rechaza el fast-forward de {branch}: el worktree tiene cambios sin confirmar. "
             "Confírmalos y publícalos primero (fase publish de supagit) y vuelve a ejecutar. "

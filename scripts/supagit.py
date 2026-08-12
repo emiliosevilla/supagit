@@ -1338,15 +1338,38 @@ class Pipeline:
                     ),
                     ask_continue=False,
                 )
-                integrate_line = self.tutor_prompt(
-                    t("explain_integrate"),
-                    t("integrate_prompt"),
+                worktrees, other_work, pipeline_branches = (
+                    supagit_menu.classify_menu_branches(inventory)
                 )
+                base = inventory.first_branch
+                if worktrees or other_work:
+                    integrate_line = self.tutor_prompt(
+                        t("explain_integrate", base=base),
+                        t("integrate_prompt"),
+                    )
+                else:
+                    self.explain(
+                        t("explain_integrate_none", base=base),
+                        ask_continue=False,
+                    )
+                    integrate_line = "none"
                 default_chain = " → ".join(self.branches)
-                pipeline_line = self.tutor_prompt(
-                    t("explain_pipeline_order"),
-                    t("pipeline_order_prompt", default=default_chain),
-                )
+                if len(pipeline_branches) <= 1 and not self.options.pipeline_order:
+                    only = (
+                        pipeline_branches[0].name
+                        if pipeline_branches
+                        else (self.branches[0] if self.branches else base)
+                    )
+                    self.explain(
+                        t("explain_pipeline_single", branch=only),
+                        ask_continue=False,
+                    )
+                    pipeline_line = only
+                else:
+                    pipeline_line = self.tutor_prompt(
+                        t("explain_pipeline_order"),
+                        t("pipeline_order_prompt", default=default_chain),
+                    )
                 selection = self._resolve_selection(
                     inventory,
                     pipeline_line,

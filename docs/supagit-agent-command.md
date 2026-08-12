@@ -62,16 +62,16 @@ Continues are skipped; only the execution-plan gate remains. User answers are
 
 The menu has two labeled blocks:
 
-- **Independent work** — linked worktrees and other local feature branches.
-  Numbers `1.`, `2.`, … with `[✓]` defaults. Enter integrates `[✓]` branches
-  that still need a PR; `0` / `none` skips; otherwise type numbers or names.
-  Already-contained branches stay `[✓]` with a note but are skipped on Enter.
-- **Main pipeline branches** — promotion order for this run. Separate numbers
-  `1.`, `2.`, … (order matters). Enter keeps the configured default;
-  comma-separated numbers or names reorder the pipeline.
+- **Feature branches** — linked worktrees and other local features. Numbers
+  `1.`, `2.`, … with `[✓]` defaults. Enter merges pending `[✓]` branches via
+  PR; `0` skips. Already-in-base stays `[✓]` with a short note but is skipped
+  on Enter. If there are none, the menu says so and skips the prompt.
+- **Release pipeline** — promotion order for this run. Separate numbers
+  `1.`, `2.`, … (order matters). Enter keeps the configured default. If only
+  one pipeline branch exists, that prompt is skipped.
 
-Two green prompts follow the menu: integrate first, then pipeline order. After
-both, a cyan **Situation preflight** lists sync findings and proposed cures
+Green prompts follow only when there is something to choose: features first,
+then pipeline order. After selection, a cyan **Situation preflight** lists sync findings and proposed cures
 (publish-then-ff, feature ff, etc.). Blocked findings (diverged branch, dirty
 feature behind upstream) abort with exact `git`/`gh` commands. Then a numbered
 cyan execution plan is printed (cures included), then a green confirmation

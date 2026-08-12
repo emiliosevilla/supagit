@@ -433,7 +433,7 @@ class MenuTests(unittest.TestCase):
         self.assertIn("feature/x", text)
         self.assertRegex(text, r"(?m)^1\. \[✓\] feature/x")
         self.assertRegex(text, r"(?m)^2\. \[✓\] old")  # contained still checked
-        self.assertIn("already included", text)
+        self.assertIn("already in", text)
         self.assertNotIn("[ ]", text)
         self.assertIn("old", text)
         self.assertRegex(text, r"(?m)^1\. dev")
@@ -441,6 +441,28 @@ class MenuTests(unittest.TestCase):
         self.assertRegex(text, r"(?m)^3\. prod")
         self.assertNotIn("Pipeline order (comma-separated", text)
         self.assertNotIn("[pipeline", text)
+
+    def test_render_sweeper_menu_empty_work_shows_none(self) -> None:
+        layout = RepoLayout(
+            launch_root=Path("/repo"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=False,
+        )
+        inv = RepoInventory(
+            layout,
+            (),
+            (
+                BranchInfo(
+                    "main", True, True, Path("/repo"), 0, 0, True, "origin/main", False
+                ),
+            ),
+            "main",
+        )
+        text = supagit_menu.render_sweeper_menu(inv)
+        self.assertIn("nothing to merge", text)
+        self.assertIn("main", text)
+        self.assertIn("Release pipeline", text)
 
     def test_classify_puts_worktree_before_other_work(self) -> None:
         inv = _fake_inventory()
@@ -2307,6 +2329,58 @@ class OrchestrationTests(unittest.TestCase):
         self.assertFalse(explain_kwargs[0]["force_confirm"])
         plan_call = explain_kwargs[-1]
         self.assertTrue(plan_call["force_confirm"])
+
+    def test_run_branch_menu_skips_prompts_when_no_work_and_single_pipeline(self) -> None:
+        layout = RepoLayout(
+            launch_root=Path("/repo"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=False,
+        )
+        inv = RepoInventory(
+            layout,
+            (),
+            (
+                BranchInfo(
+                    "main", True, True, Path("/repo"), 0, 0, True, "origin/main", False
+                ),
+            ),
+            "main",
+        )
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=False,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.branches = ("main",)
+        pipeline.remote = "origin"
+        pipeline.original_branch = "main"
+        tutor_calls: list[tuple[str, str]] = []
+        explained: list[str] = []
+
+        def capture_explain(
+            message: str, *, ask_continue: bool = True, force_confirm: bool = False
+        ) -> None:
+            explained.append(message)
+
+        def capture_tutor(explanation: str, prompt: str) -> str:
+            tutor_calls.append((explanation, prompt))
+            raise AssertionError("should not prompt when nothing to choose")
+
+        pipeline.explain = capture_explain  # type: ignore[method-assign]
+        pipeline.tutor_prompt = capture_tutor  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
+
+        selection = pipeline.run_branch_menu(inv)
+        self.assertEqual(selection.integrate, ())
+        self.assertEqual(selection.pipeline, ("main",))
+        self.assertEqual(tutor_calls, [])
+        self.assertTrue(any("nothing to merge" in msg.lower() or "no feature" in msg.lower() for msg in explained))
+        self.assertTrue(any("pipeline for this run: main" in msg.lower() for msg in explained))
 
     def test_no_sweep_run_calls_situation_preflight(self) -> None:
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)

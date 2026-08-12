@@ -226,19 +226,23 @@ def render_sweeper_menu(
         lines.append(t("menu_current_branch", branch=current_branch))
         lines.append("")
 
-    if worktrees:
-        lines.append(t("menu_section_worktrees"))
-        for branch in worktrees:
-            lines.append(_format_work_branch_line(work_index, branch, base))
-            work_index += 1
+    if worktrees or other_work:
+        if worktrees:
+            lines.append(t("menu_section_worktrees"))
+            for branch in worktrees:
+                lines.append(_format_work_branch_line(work_index, branch, base))
+                work_index += 1
 
-    if other_work:
-        if lines:
-            lines.append("")
-        lines.append(t("menu_section_other_work"))
-        for branch in other_work:
-            lines.append(_format_work_branch_line(work_index, branch, base))
-            work_index += 1
+        if other_work:
+            if lines:
+                lines.append("")
+            lines.append(t("menu_section_other_work"))
+            for branch in other_work:
+                lines.append(_format_work_branch_line(work_index, branch, base))
+                work_index += 1
+    else:
+        lines.append(t("menu_section_worktrees"))
+        lines.append(t("menu_section_work_empty", base=base))
 
     if pipeline:
         if lines:
