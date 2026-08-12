@@ -724,10 +724,22 @@ class CommitDirtyTreeTests(unittest.TestCase):
 
 
 class IntegrateBranchTests(unittest.TestCase):
+    @staticmethod
+    def _mergeable_gh(**extra: object):
+        """Minimal GhClient stand-in with mergeability check."""
+
+        class FakeGh:
+            def pr_mergeable(self, number: int) -> str:
+                return "MERGEABLE"
+
+        for name, value in extra.items():
+            setattr(FakeGh, name, value)
+        return FakeGh
+
     def test_reuses_existing_pr_and_merges(self) -> None:
         actions: list[str] = []
 
-        class FakeGh:
+        class FakeGh(self._mergeable_gh()):
             def ensure_ready(self) -> None:
                 actions.append("auth")
 
@@ -748,10 +760,14 @@ class IntegrateBranchTests(unittest.TestCase):
             actions.append("git:" + " ".join(args))
             if args[:2] == ("status", "--porcelain"):
                 return ""
+            if args[:3] == ("ls-remote", "--heads", "origin"):
+                return "abc refs/heads/feature/x\n"
             if args[:2] == ("branch", "--show-current"):
                 return "feature/x\n"
             if args[:3] == ("rev-list", "--left-right", "--count"):
                 return "0\t0"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
             if args[0] == "rev-parse":
                 return "abc"
             if args[0] == "push":
@@ -760,7 +776,7 @@ class IntegrateBranchTests(unittest.TestCase):
                 return ""
             if args[:2] == ("rev-parse", "--abbrev-ref"):
                 return "origin/feature/x\n"
-            return "ok"
+            raise AssertionError(f"unexpected git call: {args}")
 
         supagit_sweep.integrate_branch(
             run_git,
@@ -792,6 +808,9 @@ class IntegrateBranchTests(unittest.TestCase):
             def find_open_pr(self, head: str, base: str) -> int | None:
                 return None
 
+            def pr_mergeable(self, number: int) -> str:
+                return "MERGEABLE"
+
             def create_pr(self, head: str, base: str, title: str) -> int:
                 actions.append(f"create:{head}->{base}:{title}")
                 return 9
@@ -802,12 +821,16 @@ class IntegrateBranchTests(unittest.TestCase):
         def run_git(*args, cwd=None, capture=True):
             if args[:2] == ("status", "--porcelain"):
                 return ""
+            if args[:3] == ("ls-remote", "--heads", "origin"):
+                return "abc refs/heads/feature/x\n"
             if args[:2] == ("branch", "--show-current"):
                 return "feature/x\n"
             if args[:3] == ("rev-list", "--left-right", "--count"):
                 return "0\t0"
             if args[:2] == ("rev-list", "--count"):
                 return "2"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
             if args[0] == "rev-parse":
                 return "abc"
             if args[0] == "push":
@@ -816,7 +839,7 @@ class IntegrateBranchTests(unittest.TestCase):
                 return ""
             if args[:2] == ("rev-parse", "--abbrev-ref"):
                 return "origin/feature/x\n"
-            return "ok"
+            raise AssertionError(f"unexpected git call: {args}")
 
         supagit_sweep.integrate_branch(
             run_git,
@@ -847,6 +870,9 @@ class IntegrateBranchTests(unittest.TestCase):
             def find_open_pr(self, head: str, base: str) -> int | None:
                 return None
 
+            def pr_mergeable(self, number: int) -> str:
+                return "MERGEABLE"
+
             def create_pr(self, head: str, base: str, title: str) -> int:
                 actions.append(f"create:{head}")
                 return 11
@@ -868,13 +894,17 @@ class IntegrateBranchTests(unittest.TestCase):
                 return ""
             if args[:2] == ("rev-list", "--count"):
                 return "2"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
             if args[0] == "rev-parse":
                 return "abc"
             if args[0] == "fetch":
                 if "refs/heads/work" in args:
                     raise AssertionError("must not fetch missing feature ref")
                 return ""
-            return "ok"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
+            raise AssertionError(f"unexpected git call: {args}")
 
         supagit_sweep.integrate_branch(
             run_git,
@@ -895,6 +925,131 @@ class IntegrateBranchTests(unittest.TestCase):
         )
         self.assertIn("create:work", actions)
         self.assertIn("merge:11", actions)
+
+    def test_integrate_rebases_when_base_moved_ahead(self) -> None:
+        actions: list[str] = []
+
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                return None
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                return None
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                return None
+
+            def pr_mergeable(self, number: int) -> str:
+                return "MERGEABLE"
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                return 12
+
+            def merge_pr(self, number: int) -> None:
+                actions.append(f"merge:{number}")
+
+        def run_git(*args, cwd=None, capture=True):
+            actions.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:3] == ("ls-remote", "--heads", "origin"):
+                return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "main\n"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                raise RuntimeError("not ancestor")
+            if args[:2] == ("rev-list", "--count"):
+                if args[2] == "work..origin/main":
+                    return "1"
+                if args[2] == "origin/main..work":
+                    return "2"
+                return "0"
+            if args[0] == "checkout":
+                return ""
+            if args[0] == "rebase":
+                return ""
+            if args[0] == "push":
+                return ""
+            if args[0] == "fetch":
+                return ""
+            if args[0] == "rev-parse":
+                return "abc"
+            raise AssertionError(f"unexpected git call: {args}")
+
+        supagit_sweep.integrate_branch(
+            run_git,
+            gh=FakeGh(),
+            remote="origin",
+            remote_url="git@github.com:acme/demo.git",
+            branch="work",
+            base="main",
+            cwd=Path("/repo"),
+            message_provider=lambda: "unused",
+            reject_sensitive=lambda paths: None,
+            dry_run=False,
+            contained_in_first=False,
+        )
+        self.assertIn(("rebase", "origin/main"), actions)
+        self.assertTrue(
+            any(a[:3] == ("push", "--force-with-lease", "origin") for a in actions)
+        )
+        self.assertIn("merge:12", actions)
+
+    def test_integrate_refuses_conflicting_pr(self) -> None:
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                return None
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                return None
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                return 21
+
+            def pr_mergeable(self, number: int) -> str:
+                return "CONFLICTING"
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                raise AssertionError("should not create")
+
+            def merge_pr(self, number: int) -> None:
+                raise AssertionError("must not merge")
+
+        def run_git(*args, cwd=None, capture=True):
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:3] == ("ls-remote", "--heads", "origin"):
+                return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "main\n"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
+            if args[:2] == ("rev-list", "--count"):
+                return "0"
+            if args[0] == "push":
+                return ""
+            if args[0] == "fetch":
+                return ""
+            if args[0] == "rev-parse":
+                return "abc"
+            raise AssertionError(args)
+
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
+            supagit_sweep.integrate_branch(
+                run_git,
+                gh=FakeGh(),
+                remote="origin",
+                remote_url="git@github.com:acme/demo.git",
+                branch="work",
+                base="main",
+                cwd=Path("/repo"),
+                message_provider=lambda: "unused",
+                reject_sensitive=lambda paths: None,
+                dry_run=False,
+                contained_in_first=False,
+            )
+        self.assertIn("21", str(ctx.exception))
+        self.assertIn("conflict", str(ctx.exception).lower())
 
     def test_integrate_refuses_empty_pr_before_create(self) -> None:
         import supagit_i18n
@@ -991,6 +1146,9 @@ class IntegrateBranchTests(unittest.TestCase):
             def find_open_pr(self, head: str, base: str) -> int | None:
                 return 1
 
+            def pr_mergeable(self, number: int) -> str:
+                return "MERGEABLE"
+
             def create_pr(self, head: str, base: str, title: str) -> int:
                 raise AssertionError("reuse")
 
@@ -1001,10 +1159,14 @@ class IntegrateBranchTests(unittest.TestCase):
             actions.append("git:" + " ".join(args))
             if args[:2] == ("status", "--porcelain"):
                 return ""
+            if args[:3] == ("ls-remote", "--heads", "origin"):
+                return "abc refs/heads/feature/x\n"
             if args[:2] == ("branch", "--show-current"):
                 return "feature/x\n"
             if args[:3] == ("rev-list", "--left-right", "--count"):
                 return "1\t0"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
             if args[0] == "rev-parse" and args[-1] in tips:
                 return tips[args[-1]]
             if args[0] == "fetch":
@@ -1017,7 +1179,7 @@ class IntegrateBranchTests(unittest.TestCase):
                 return ""
             if args[:2] == ("rev-parse", "--abbrev-ref"):
                 return "origin/feature/x\n"
-            return "ok"
+            raise AssertionError(f"unexpected git call: {args}")
 
         supagit_sweep.integrate_branch(
             run_git,

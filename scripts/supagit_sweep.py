@@ -368,6 +368,30 @@ class GhClient:
             return None
         return int(output)
 
+    def pr_mergeable(self, number: int) -> str:
+        """Return GitHub mergeable: MERGEABLE, CONFLICTING, or UNKNOWN."""
+        if self._dry_run:
+            return "MERGEABLE"
+        import json
+
+        output = self._run_raw(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(number),
+                "--json",
+                "mergeable",
+            ]
+        ).strip()
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise SweepError(
+                f"Could not parse mergeability for pull request #{number}."
+            ) from exc
+        return str(data.get("mergeable") or "UNKNOWN")
+
     def create_pr(self, head: str, base: str, title: str) -> int:
         if self._dry_run:
             return 0
@@ -575,6 +599,67 @@ def push_branch(
     run_git("push", remote, f"{branch}:{branch}", cwd=cwd)
 
 
+def rebase_branch_onto(
+    run_git: GitRunner,
+    branch: str,
+    onto_ref: str,
+    *,
+    cwd: Path,
+    dry_run: bool,
+) -> bool:
+    """Rebase ``branch`` onto ``onto_ref`` when the base moved ahead. Returns True if rebased."""
+    try:
+        run_git("merge-base", "--is-ancestor", onto_ref, branch, cwd=cwd)
+        return False
+    except Exception:
+        pass
+
+    try:
+        behind = int(
+            run_git("rev-list", "--count", f"{branch}..{onto_ref}", cwd=cwd).strip()
+        )
+    except ValueError as exc:
+        raise SweepError(
+            f"Could not count commits between {branch} and {onto_ref} before rebase."
+        ) from exc
+    if behind <= 0:
+        return False
+
+    if dry_run:
+        return True
+
+    current = ""
+    try:
+        current = run_git("branch", "--show-current", cwd=cwd).strip()
+    except Exception:
+        pass
+
+    switched = False
+    if current != branch:
+        run_git("checkout", branch, cwd=cwd)
+        switched = True
+
+    try:
+        run_git("rebase", onto_ref, cwd=cwd)
+    except Exception as exc:
+        try:
+            run_git("rebase", "--abort", cwd=cwd)
+        except Exception:
+            pass
+        if switched and current:
+            try:
+                run_git("checkout", current, cwd=cwd)
+            except Exception:
+                pass
+        raise SweepError(
+            t("error_rebase_conflict", branch=branch, base_ref=onto_ref)
+        ) from exc
+
+    if switched and current:
+        run_git("checkout", current, cwd=cwd)
+    return True
+
+
 def integrate_branch(
     run_git: GitRunner,
     *,
@@ -621,6 +706,23 @@ def integrate_branch(
 
     push_branch(run_git, remote, branch, cwd=cwd, dry_run=dry_run)
 
+    remote_base = f"{remote}/{base}"
+    try:
+        run_git(
+            "fetch",
+            remote,
+            f"refs/heads/{base}:refs/remotes/{remote}/{base}",
+            cwd=cwd,
+        )
+    except Exception as exc:
+        raise SweepError(f"Could not fetch {remote_base} before integrating.") from exc
+
+    rebased = rebase_branch_onto(
+        run_git, branch, remote_base, cwd=cwd, dry_run=dry_run
+    )
+    if rebased and not dry_run:
+        run_git("push", "--force-with-lease", remote, branch, cwd=cwd)
+
     pr_number = gh.find_open_pr(branch, base)
     if pr_number is None:
         assert_commits_for_pr(
@@ -632,6 +734,17 @@ def integrate_branch(
         )
         title = f"supagit: integrate {branch} into {base}"
         pr_number = gh.create_pr(branch, base, title)
+
+    mergeable = gh.pr_mergeable(pr_number)
+    if mergeable == "CONFLICTING":
+        raise SweepError(
+            t(
+                "error_pr_merge_conflict",
+                head=branch,
+                base=base,
+                number=pr_number,
+            )
+        )
 
     gh.merge_pr(pr_number)
 

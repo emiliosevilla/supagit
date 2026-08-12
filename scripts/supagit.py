@@ -948,11 +948,20 @@ class Pipeline:
                 f"zero-zero ({ahead_behind}). The pipeline is stopping."
             )
 
-    def commit_and_publish_dev(self) -> None:
+    def commit_and_publish_dev(self, *, integrate: Sequence[str] = ()) -> None:
         print(f"\n=== PUBLISH LOCAL CHANGES TO {self.dev} ===")
         status = self.git("status", "--porcelain", capture=True)
         status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
         self._reject_sensitive_paths(status_paths)
+
+        if status.strip() and integrate:
+            raise ShipError(
+                t(
+                    "error_dirty_pipeline_with_integrate",
+                    pipeline=self.dev,
+                    features=", ".join(integrate),
+                )
+            )
 
         if status.strip():
             message = self._commit_message()
@@ -1743,7 +1752,7 @@ class Pipeline:
         selection = self._extend_integrate_after_pre_commit(selection, committed_on)
         self.validate_pipeline_head()
         inventory = self.build_inventory()
-        self.commit_and_publish_dev()
+        self.commit_and_publish_dev(integrate=selection.integrate)
         if selection.integrate:
             self.sweep_features(selection, inventory)
         self.ff_sync_first_branch()
