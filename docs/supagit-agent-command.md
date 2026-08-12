@@ -90,10 +90,12 @@ create.
 After plan Confirm, phases run in this order: **commit dirty work on the
 current feature if needed** (and auto-add that feature to integrate when the
 new commit is not yet in `pipeline[0]`) → ensure checkout on `pipeline[0]` →
-**publish** local changes on first (clean behind defers to ff) → integrate
-features (ff only if the remote feature still exists) → **ff_sync** first
-(refused while dirty; never `reset --hard` on a dirty tree) → checks / migrate /
-promote / cleanup.
+**publish** local changes on first (clean behind defers to ff; refused while dirty
+when features are scheduled to integrate) → integrate features (ff only if the
+remote feature still exists; rebase onto `pipeline[0]` when it moved ahead;
+refuse merge when GitHub reports conflicts) → **ff_sync** first (refused while
+dirty; never `reset --hard` on a dirty tree) → checks / migrate / promote /
+cleanup.
 
 ## Promotion phase
 
@@ -110,7 +112,10 @@ path.
 
 Optional cleanup at the end removes merged feature branches and linked worktrees
 when the user confirms (`--cleanup` applies without prompting when used with
-`--yes`; `--no-cleanup` skips cleanup entirely).
+`--yes`; `--no-cleanup` skips cleanup entirely). Local feature branches are
+deleted only after verifying they are contained in `pipeline[0]`; if
+`git branch -d` refuses because a stale upstream is behind, cleanup uses
+`-D` after that check.
 
 ## Non-interactive flags
 

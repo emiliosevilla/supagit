@@ -141,6 +141,21 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "No commits to put in a pull request from {head} into {base} "
             "({base_ref}..{head} is empty). Omit this branch or add commits first."
         ),
+        "error_dirty_pipeline_with_integrate": (
+            "{pipeline} has uncommitted changes while feature branch(es) "
+            "({features}) will integrate via pull request. Commit on a feature "
+            "branch first (run supagit from that branch), then integrate — "
+            "committing on {pipeline} first causes merge conflicts."
+        ),
+        "error_rebase_conflict": (
+            "Rebase of {branch} onto {base_ref} stopped with conflicts. "
+            "Resolve on {branch}, push, then re-run supagit."
+        ),
+        "error_pr_merge_conflict": (
+            "Pull request #{number} ({head} into {base}) has merge conflicts. "
+            "Rebase {head} onto {base}, resolve conflicts, push, then re-run — "
+            "or close the PR and reconcile locally."
+        ),
         "error_integrate_number": (
             "Invalid independent-work number: {token}. Use the numbers shown next to "
             "worktrees / other local work."
@@ -156,6 +171,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "confirm_cleanup": "Apply optional cleanup of merged branches/worktrees?",
         "cleanup_nothing": "Cleanup: nothing safe to remove.",
         "cleanup_candidates": "Cleanup candidates:",
+        "error_cleanup_not_merged": (
+            "Refusing to delete local branch {branch}: it is not fully merged into {base}."
+        ),
         "pipeline_completed": "\nPipeline completed: {chain}. Final checkout: {branch}.",
         "update_checking": "[supagit] Checking for updates from GitHub…",
         "update_current": "[supagit] Already on the latest supagit (origin/main).",
@@ -216,6 +234,15 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "confirm_commit_before_reposition": (
             "Commit all current changes on {branch} so I can move to {target}?"
+        ),
+        "integrate_after_pre_commit": (
+            "Committed new work on {branch} that is not yet in {base}; "
+            "I will integrate {branch} via pull request in this run."
+        ),
+        "error_pre_commit_needs_integrate": (
+            "Committed local changes on {branch}, but they are not in {base} and "
+            "--no-sweep skipped feature integration. Re-run without --no-sweep "
+            "(or pass --integrate {branch}) so those commits can be merged."
         ),
         "final_checkout_mismatch": (
             "the run finished on {actual}, not on the expected {expected}. "
@@ -461,6 +488,21 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "No hay commits para una pull request de {head} hacia {base} "
             "({base_ref}..{head} está vacío). Omite esa rama o añade commits primero."
         ),
+        "error_dirty_pipeline_with_integrate": (
+            "{pipeline} tiene cambios sin confirmar mientras la(s) rama(s) feature "
+            "({features}) se integrarán vía pull request. Confírmalos primero en una "
+            "rama feature (ejecuta supagit desde esa rama) y luego integra — confirmar "
+            "en {pipeline} antes provoca conflictos de merge."
+        ),
+        "error_rebase_conflict": (
+            "El rebase de {branch} sobre {base_ref} se detuvo por conflictos. "
+            "Resuélvelos en {branch}, haz push y vuelve a ejecutar supagit."
+        ),
+        "error_pr_merge_conflict": (
+            "La pull request #{number} ({head} hacia {base}) tiene conflictos de merge. "
+            "Haz rebase de {head} sobre {base}, resuelve conflictos, push y vuelve a "
+            "ejecutar — o cierra la PR y reconcilia en local."
+        ),
         "error_integrate_number": (
             "Número de trabajo independiente no válido: {token}. Usa los números junto a "
             "los worktrees / otro trabajo local."
@@ -477,6 +519,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "confirm_cleanup": "¿Aplicar la limpieza opcional de ramas/worktrees fusionados?",
         "cleanup_nothing": "Limpieza: no hay nada seguro que eliminar.",
         "cleanup_candidates": "Candidatos a limpieza:",
+        "error_cleanup_not_merged": (
+            "Me niego a borrar la rama local {branch}: no está completamente fusionada en {base}."
+        ),
         "pipeline_completed": "\nPipeline completado: {chain}. Checkout final: {branch}.",
         "update_checking": "[supagit] Comprobando actualizaciones en GitHub…",
         "update_current": "[supagit] Ya estás en la última versión de supagit (origin/main).",
@@ -538,6 +583,15 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "confirm_commit_before_reposition": (
             "¿Confirmar todos los cambios actuales en {branch} para poder mover a {target}?"
+        ),
+        "integrate_after_pre_commit": (
+            "He confirmado trabajo nuevo en {branch} que aún no está en {base}; "
+            "integraré {branch} con una pull request en esta misma ejecución."
+        ),
+        "error_pre_commit_needs_integrate": (
+            "He confirmado cambios locales en {branch}, pero no están en {base} y "
+            "--no-sweep omitió la integración de features. Vuelve a ejecutar sin "
+            "--no-sweep (o pasa --integrate {branch}) para fusionar esos commits."
         ),
         "final_checkout_mismatch": (
             "la ejecución terminó en {actual}, no en {expected} como se esperaba. "

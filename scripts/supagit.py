@@ -948,11 +948,20 @@ class Pipeline:
                 f"zero-zero ({ahead_behind}). The pipeline is stopping."
             )
 
-    def commit_and_publish_dev(self) -> None:
+    def commit_and_publish_dev(self, *, integrate: Sequence[str] = ()) -> None:
         print(f"\n=== PUBLISH LOCAL CHANGES TO {self.dev} ===")
         status = self.git("status", "--porcelain", capture=True)
         status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
         self._reject_sensitive_paths(status_paths)
+
+        if status.strip() and integrate:
+            raise ShipError(
+                t(
+                    "error_dirty_pipeline_with_integrate",
+                    pipeline=self.dev,
+                    features=", ".join(integrate),
+                )
+            )
 
         if status.strip():
             message = self._commit_message()
@@ -1513,12 +1522,13 @@ class Pipeline:
             cwd=self.root,
         )
 
-    def ensure_checkout_on_first_branch(self) -> None:
+    def ensure_checkout_on_first_branch(self) -> str | None:
+        """Move to pipeline[0]. Return feature name if a pre-move commit was made."""
         current = self.git(
             "branch", "--show-current", capture=True, cwd=self.root
         ).strip()
         if current == self.dev:
-            return
+            return None
 
         other = self._first_branch_worktree()
         if other is not None:
@@ -1547,6 +1557,7 @@ class Pipeline:
                 raise ShipError(t("error_detached_unreachable", sha=sha))
             current_label = t("detached_label", sha=sha)
 
+        committed_on: str | None = None
         status = self.git("status", "--porcelain", capture=True, cwd=self.root)
         if status.strip():
             if current == "":
@@ -1559,6 +1570,7 @@ class Pipeline:
                     )
                 )
             self._commit_dirty_before_reposition(current, status)
+            committed_on = current
             if not self.options.dry_run:
                 status = self.git(
                     "status", "--porcelain", capture=True, cwd=self.root
@@ -1579,6 +1591,44 @@ class Pipeline:
             t("confirm_reposition", current=current_label, target=self.dev),
         )
         self.git("checkout", self.dev, mutating=True, cwd=self.root)
+        return committed_on
+
+    def _extend_integrate_after_pre_commit(
+        self, selection: MenuSelection, committed_on: str | None
+    ) -> MenuSelection:
+        """If a pre-reposition commit left commits outside pipeline[0], integrate that branch.
+
+        The sweeper menu may have marked the feature as already contained before
+        the commit ran; without this, those new commits never get a PR.
+        """
+        if not committed_on or committed_on == self.dev:
+            return selection
+        if committed_on in selection.integrate or committed_on in selection.pipeline:
+            return selection
+        if self.options.no_sweep:
+            raise ShipError(
+                t(
+                    "error_pre_commit_needs_integrate",
+                    branch=committed_on,
+                    base=self.dev,
+                )
+            )
+        needs_integrate = self.options.dry_run or not supagit_inventory.branch_contained(
+            committed_on, self.dev, self.git
+        )
+        if not needs_integrate:
+            return selection
+        print(
+            t(
+                "integrate_after_pre_commit",
+                branch=committed_on,
+                base=self.dev,
+            )
+        )
+        return MenuSelection(
+            integrate=selection.integrate + (committed_on,),
+            pipeline=selection.pipeline,
+        )
 
     def _commit_dirty_before_reposition(self, branch: str, status: str) -> None:
         """Save uncommitted work on the current feature before moving to pipeline[0]."""
@@ -1680,7 +1730,12 @@ class Pipeline:
             self.tutor_confirm(t("explain_cleanup"), t("confirm_cleanup"))
         elif self.options.yes and self.options.cleanup is True:
             pass
-        supagit_sweep.apply_cleanup(self._sweep_git, plan, dry_run=self.options.dry_run)
+        supagit_sweep.apply_cleanup(
+            self._sweep_git,
+            plan,
+            dry_run=self.options.dry_run,
+            into=self.dev,
+        )
 
     def run(self) -> None:
         if not self.options.no_sweep:
@@ -1693,10 +1748,11 @@ class Pipeline:
         else:
             selection = self.run_branch_menu(inventory)
         self.apply_menu_selection(selection)
-        self.ensure_checkout_on_first_branch()
+        committed_on = self.ensure_checkout_on_first_branch()
+        selection = self._extend_integrate_after_pre_commit(selection, committed_on)
         self.validate_pipeline_head()
         inventory = self.build_inventory()
-        self.commit_and_publish_dev()
+        self.commit_and_publish_dev(integrate=selection.integrate)
         if selection.integrate:
             self.sweep_features(selection, inventory)
         self.ff_sync_first_branch()

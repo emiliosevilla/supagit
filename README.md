@@ -239,8 +239,10 @@ Phase order after plan Confirm:
 2. Ensure checkout on the first pipeline branch.
 3. **Publish** local changes on that branch (commit/push when needed). A clean
    tree that is only behind defers sync to the ff step.
-4. **Integrate** selected features (with feature ff when behind-only; skip ff when
-   the remote feature branch no longer exists).
+4. **Integrate** selected features (with feature ff when the remote branch exists;
+   rebase onto `pipeline[0]` when it moved ahead; refuse merge when GitHub reports
+   conflicts). Do not commit dirty changes on `pipeline[0]` while features are
+   scheduled to integrate — that causes PR conflicts.
 5. **Fast-forward** the first pipeline branch to its remote (ff-only; refused
    while the worktree is dirty; never `reset --hard` on a dirty tree).
 6. Checks, optional migrations, promote adjacent pairs, optional cleanup.
@@ -285,6 +287,9 @@ Confirmations default to Yes: Enter proceeds (`[Y/n]` / Spanish `[S/n]`).
 
 Optional cleanup at the end removes merged feature branches and linked
 worktrees when confirmed interactively, or when `--cleanup` is passed.
+Local branches are deleted only after verifying they are contained in the
+first pipeline branch; if plain `-d` refuses because a stale upstream
+(`origin/work`) is behind, cleanup force-deletes (`-D`) after that check.
 
 ### Optional sweep configuration
 
