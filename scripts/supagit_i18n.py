@@ -63,7 +63,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "explain_promote_pr": (
             "GitHub protects {target} ({visibility}): I will open or reuse a pull request "
-            "from {source} into {target} and merge it. I will not use admin bypass."
+            "from {source} into {target} and merge it with administrator merge so branch "
+            "rules do not block the release."
         ),
         "promote_gate_summary": (
             "GitHub {owner}/{repo} is {visibility}; updating {branch} uses {mode}."
@@ -75,8 +76,11 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "promote_pr_reused": "Reusing open pull request #{number}: {source} → {target}.",
         "error_promote_pr_needs_approval": (
             "Pull request #{number} ({source} → {target}) could not be merged automatically. "
-            "Approve it as code owner (or satisfy the branch rules), then re-run supagit. "
-            "supagit never uses admin bypass."
+            "Approve it as code owner (or satisfy the branch rules), then re-run supagit."
+        ),
+        "error_promote_pr_merge_failed": (
+            "Could not merge pull request #{number} ({source} → {target}) with --admin. "
+            "Check gh auth and repository permissions, then re-run supagit."
         ),
         "explain_cleanup": (
             "Optional step: remove worktrees and branches that were already merged "
@@ -409,7 +413,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "explain_promote_pr": (
             "GitHub protege {target} ({visibility}): abriré o reutilizaré un pull request "
-            "de {source} a {target} y lo fusionaré. No usaré bypass de administrador."
+            "de {source} a {target} y lo fusionaré con permisos de administrador para que "
+            "las reglas de rama no bloqueen el release."
         ),
         "promote_gate_summary": (
             "GitHub {owner}/{repo} es {visibility}; actualizar {branch} usa {mode}."
@@ -422,7 +427,11 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "error_promote_pr_needs_approval": (
             "El pull request #{number} ({source} → {target}) no se pudo fusionar automáticamente. "
             "Apruébalo como code owner (o cumple las reglas de la rama) y vuelve a ejecutar "
-            "supagit. supagit nunca usa bypass de administrador."
+            "supagit."
+        ),
+        "error_promote_pr_merge_failed": (
+            "No se pudo fusionar el pull request #{number} ({source} → {target}) con --admin. "
+            "Revisa gh auth y los permisos del repositorio, y vuelve a ejecutar supagit."
         ),
         "explain_cleanup": (
             "Paso opcional: eliminar worktrees y ramas ya fusionadas que se pueden borrar con seguridad."

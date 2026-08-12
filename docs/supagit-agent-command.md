@@ -85,9 +85,9 @@ fast-forwarded in the correct worktree (or by updating the ref without checking
 the feature out onto `pipeline[0]`) before `gh pr create`. If the remote feature
 branch is gone (typical after GitHub deletes the head of a merged PR), integrate
 skips that ff and pushes the local branch. Empty `base..head` ranges fail before
-create. Feature PR merges use `gh pr merge --merge --admin` so branch
-protection on `pipeline[0]` does not block the sweeper; promotion PRs still
-never use `--admin`.
+create. Feature integrate and promotion PRs merge with `gh pr merge --merge --admin`
+so branch protection does not block the sweeper; direct-push remotes still use
+`git merge` + `git push`.
 
 After plan Confirm, phases run in this order: **commit dirty work on the
 current feature if needed** (and auto-add that feature to integrate when the

@@ -609,6 +609,57 @@ class GhClientTests(unittest.TestCase):
         client.merge_pr(7, delete_branch=False)
         self.assertEqual(calls[0], ["gh", "pr", "merge", "7", "--merge"])
 
+    def test_merge_pr_admin_without_delete(self) -> None:
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            return ""
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        client.merge_pr(8, admin=True, delete_branch=False)
+        self.assertEqual(calls[0], ["gh", "pr", "merge", "8", "--merge", "--admin"])
+
+    def test_promote_via_pr_merges_with_admin(self) -> None:
+        merges: list[tuple] = []
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.root = Path("/repo")
+        pipeline.launch_root = Path("/repo")
+        pipeline.main_root = Path("/repo")
+        pipeline.remote = "origin"
+        explained: list[str] = []
+
+        def git(*args, **kwargs):
+            if args[:2] == ("worktree", "list"):
+                return "worktree /repo\nbranch refs/heads/main\n"
+            return ""
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline._sweep_git = lambda *a, cwd=None, capture=True: ""  # type: ignore[method-assign]
+        pipeline.explain = lambda message, **_kwargs: explained.append(message)  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+
+        class FakeGh:
+            def ensure_ready(self) -> None: ...
+            def ensure_github_remote(self, url: str) -> None: ...
+            def find_open_pr(self, head, base): return 5
+            def create_promote_pr(self, head, base, title): return 5
+            def merge_pr(self, number: int, **kwargs):
+                merges.append((number, kwargs))
+
+        with patch.object(ENGINE.supagit_sweep, "GhClient", return_value=FakeGh()):
+            with patch.object(ENGINE.supagit_sweep, "push_branch", return_value=None):
+                pipeline._promote_via_pr("dev", "main", "git@github.com:acme/demo.git")
+
+        self.assertEqual(merges, [(5, {"admin": True, "delete_branch": False})])
+
     def test_pr_number_from_create_output(self) -> None:
         self.assertEqual(
             supagit_sweep.pr_number_from_create_output(

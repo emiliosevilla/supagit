@@ -1239,11 +1239,11 @@ class Pipeline:
         else:
             self.explain(t("promote_pr_reused", number=pr_number, source=source, target=target))
         try:
-            gh.merge_pr(pr_number, delete_branch=False)
+            gh.merge_pr(pr_number, admin=True, delete_branch=False)
         except Exception as exc:
             raise ShipError(
                 t(
-                    "error_promote_pr_needs_approval",
+                    "error_promote_pr_merge_failed",
                     number=pr_number,
                     source=source,
                     target=target,

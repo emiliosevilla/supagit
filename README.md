@@ -228,8 +228,7 @@ the correct worktree (or via ref update without checking them out onto
 (common after a merged PR), integrate skips that ff and pushes the local branch
 to recreate it. Empty `base..head` ranges are refused before `gh pr create`.
 Feature integrates merge with `gh pr merge --merge --admin` so protected
-`pipeline[0]` rules do not block the sweeper; promotion PRs still never use
-`--admin`.
+`pipeline[0]` rules do not block the sweeper; promotion PRs also use `--admin`.
 
 Phase order after plan Confirm:
 
@@ -259,9 +258,10 @@ For each promotion into a destination branch, `supagit` asks GitHub (via `gh`)
 whether that branch is protected by an active **ruleset** or classic branch
 protection that **requires a pull request**:
 
-- **Protected (PR required)** — opens or reuses a PR `source → target`, merges
-  it with `gh`, and never uses admin bypass. If reviews/code owners block the
-  merge, the run stops with instructions to approve and re-run.
+- **Protected (PR required)** — opens or reuses a PR `source → target` and
+  merges it with `gh pr merge --merge --admin` so branch rules do not block the
+  release. If `--admin` is unavailable (permissions/auth), the run stops with
+  instructions to check `gh auth`.
 - **Unprotected / direct push allowed** — local `git merge` + `git push` as
   before.
 - **Non-GitHub remotes** — always the direct merge+push path.
