@@ -418,10 +418,14 @@ class GhClient:
             raise SweepError(f"Could not create pull request for {head} into {base}.")
         return number
 
-    def merge_pr(self, number: int, *, delete_branch: bool = True) -> None:
+    def merge_pr(
+        self, number: int, *, delete_branch: bool = True, admin: bool = False
+    ) -> None:
         if self._dry_run:
             return
         command = ["gh", "pr", "merge", str(number), "--merge"]
+        if admin:
+            command.append("--admin")
         if delete_branch:
             command.append("--delete-branch")
         self._run_raw(command)
@@ -746,7 +750,7 @@ def integrate_branch(
             )
         )
 
-    gh.merge_pr(pr_number)
+    gh.merge_pr(pr_number, admin=True)
 
     if dry_run:
         return

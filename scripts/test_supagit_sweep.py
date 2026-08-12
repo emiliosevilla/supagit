@@ -562,6 +562,20 @@ class GhClientTests(unittest.TestCase):
             ["gh", "pr", "merge", "42", "--merge", "--delete-branch"],
         )
 
+    def test_merge_pr_admin_flag(self) -> None:
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            return ""
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        client.merge_pr(22, admin=True, delete_branch=True)
+        self.assertEqual(
+            calls[0],
+            ["gh", "pr", "merge", "22", "--merge", "--admin", "--delete-branch"],
+        )
+
     def test_merge_pr_can_keep_head_branch(self) -> None:
         calls: list[list[str]] = []
 
@@ -753,7 +767,7 @@ class IntegrateBranchTests(unittest.TestCase):
             def create_pr(self, head: str, base: str, title: str) -> int:
                 raise AssertionError("should reuse")
 
-            def merge_pr(self, number: int) -> None:
+            def merge_pr(self, number: int, **kwargs) -> None:
                 actions.append(f"merge:{number}")
 
         def run_git(*args, cwd=None, capture=True):
@@ -815,7 +829,7 @@ class IntegrateBranchTests(unittest.TestCase):
                 actions.append(f"create:{head}->{base}:{title}")
                 return 9
 
-            def merge_pr(self, number: int) -> None:
+            def merge_pr(self, number: int, **kwargs) -> None:
                 actions.append(f"merge:{number}")
 
         def run_git(*args, cwd=None, capture=True):
@@ -877,7 +891,7 @@ class IntegrateBranchTests(unittest.TestCase):
                 actions.append(f"create:{head}")
                 return 11
 
-            def merge_pr(self, number: int) -> None:
+            def merge_pr(self, number: int, **kwargs) -> None:
                 actions.append(f"merge:{number}")
 
         def run_git(*args, cwd=None, capture=True):
@@ -945,7 +959,7 @@ class IntegrateBranchTests(unittest.TestCase):
             def create_pr(self, head: str, base: str, title: str) -> int:
                 return 12
 
-            def merge_pr(self, number: int) -> None:
+            def merge_pr(self, number: int, **kwargs) -> None:
                 actions.append(f"merge:{number}")
 
         def run_git(*args, cwd=None, capture=True):
@@ -1012,7 +1026,7 @@ class IntegrateBranchTests(unittest.TestCase):
             def create_pr(self, head: str, base: str, title: str) -> int:
                 raise AssertionError("should not create")
 
-            def merge_pr(self, number: int) -> None:
+            def merge_pr(self, number: int, **kwargs) -> None:
                 raise AssertionError("must not merge")
 
         def run_git(*args, cwd=None, capture=True):
@@ -1072,7 +1086,7 @@ class IntegrateBranchTests(unittest.TestCase):
                 created = True
                 raise AssertionError("must not create empty PR")
 
-            def merge_pr(self, number: int) -> None:
+            def merge_pr(self, number: int, **kwargs) -> None:
                 raise AssertionError("must not merge")
 
         def run_git(*args, cwd=None, capture=True):
@@ -1152,7 +1166,7 @@ class IntegrateBranchTests(unittest.TestCase):
             def create_pr(self, head: str, base: str, title: str) -> int:
                 raise AssertionError("reuse")
 
-            def merge_pr(self, number: int) -> None:
+            def merge_pr(self, number: int, **kwargs) -> None:
                 actions.append(f"merge:{number}")
 
         def run_git(*args, cwd=None, capture=True):
@@ -1213,7 +1227,7 @@ class IntegrateBranchTests(unittest.TestCase):
             def create_pr(self, head: str, base: str, title: str) -> int:
                 raise AssertionError("should not create")
 
-            def merge_pr(self, number: int) -> None:
+            def merge_pr(self, number: int, **kwargs) -> None:
                 raise AssertionError("should not merge")
 
         with self.assertRaises(supagit_sweep.SweepError):
