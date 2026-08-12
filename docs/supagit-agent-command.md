@@ -110,7 +110,10 @@ path.
 
 Optional cleanup at the end removes merged feature branches and linked worktrees
 when the user confirms (`--cleanup` applies without prompting when used with
-`--yes`; `--no-cleanup` skips cleanup entirely).
+`--yes`; `--no-cleanup` skips cleanup entirely). Local feature branches are
+deleted only after verifying they are contained in `pipeline[0]`; if
+`git branch -d` refuses because a stale upstream is behind, cleanup uses
+`-D` after that check.
 
 ## Non-interactive flags
 

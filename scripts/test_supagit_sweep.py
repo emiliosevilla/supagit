@@ -1098,6 +1098,52 @@ class CleanupTests(unittest.TestCase):
         self.assertIn(("worktree", "feature/y"), kinds)
         self.assertIn(("local-branch", "feature/y"), kinds)
 
+    def test_apply_cleanup_force_deletes_when_d_refuses_stale_upstream(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def run_git(*args: str, **kwargs):
+            calls.append(args)
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
+            if args[:2] == ("branch", "-d"):
+                raise RuntimeError(
+                    "not deleting branch 'work' that is not yet merged to "
+                    "'refs/remotes/origin/work', even though it is merged to HEAD"
+                )
+            if args[:2] == ("branch", "-D"):
+                return ""
+            raise AssertionError(args)
+
+        plan = supagit_sweep.CleanupPlan(
+            items=(
+                supagit_sweep.CleanupItem(
+                    kind="local-branch", name="work", path=None
+                ),
+            )
+        )
+        supagit_sweep.apply_cleanup(run_git, plan, dry_run=False, into="main")
+        self.assertIn(("branch", "-d", "work"), calls)
+        self.assertIn(("branch", "-D", "work"), calls)
+        self.assertIn(("merge-base", "--is-ancestor", "work", "main"), calls)
+
+    def test_apply_cleanup_refuses_unmerged(self) -> None:
+        def run_git(*args: str, **kwargs):
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                raise RuntimeError("not an ancestor")
+            raise AssertionError(args)
+
+        plan = supagit_sweep.CleanupPlan(
+            items=(
+                supagit_sweep.CleanupItem(
+                    kind="local-branch", name="work", path=None
+                ),
+            )
+        )
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
+            supagit_sweep.apply_cleanup(run_git, plan, dry_run=False, into="main")
+        self.assertIn("work", str(ctx.exception))
+        self.assertIn("main", str(ctx.exception))
+
 
 SPEC = importlib.util.spec_from_file_location("supagit_engine", SCRIPTS / "supagit.py")
 assert SPEC and SPEC.loader

@@ -156,6 +156,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "confirm_cleanup": "Apply optional cleanup of merged branches/worktrees?",
         "cleanup_nothing": "Cleanup: nothing safe to remove.",
         "cleanup_candidates": "Cleanup candidates:",
+        "error_cleanup_not_merged": (
+            "Refusing to delete local branch {branch}: it is not fully merged into {base}."
+        ),
         "pipeline_completed": "\nPipeline completed: {chain}. Final checkout: {branch}.",
         "update_checking": "[supagit] Checking for updates from GitHub…",
         "update_current": "[supagit] Already on the latest supagit (origin/main).",
@@ -477,6 +480,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "confirm_cleanup": "¿Aplicar la limpieza opcional de ramas/worktrees fusionados?",
         "cleanup_nothing": "Limpieza: no hay nada seguro que eliminar.",
         "cleanup_candidates": "Candidatos a limpieza:",
+        "error_cleanup_not_merged": (
+            "Me niego a borrar la rama local {branch}: no está completamente fusionada en {base}."
+        ),
         "pipeline_completed": "\nPipeline completado: {chain}. Checkout final: {branch}.",
         "update_checking": "[supagit] Comprobando actualizaciones en GitHub…",
         "update_current": "[supagit] Ya estás en la última versión de supagit (origin/main).",

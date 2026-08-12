@@ -285,6 +285,9 @@ Confirmations default to Yes: Enter proceeds (`[Y/n]` / Spanish `[S/n]`).
 
 Optional cleanup at the end removes merged feature branches and linked
 worktrees when confirmed interactively, or when `--cleanup` is passed.
+Local branches are deleted only after verifying they are contained in the
+first pipeline branch; if plain `-d` refuses because a stale upstream
+(`origin/work`) is behind, cleanup force-deletes (`-D`) after that check.
 
 ### Optional sweep configuration
 
