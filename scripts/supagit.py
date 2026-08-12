@@ -849,6 +849,17 @@ class Pipeline:
             self.warning("registered worktrees exist, but the current checkout is the main repository.")
         print(f"Repository: {self.project_name}")
         self.git("remote", "get-url", self.remote)
+        # Measure GitHub CLI health up front; refresh stale tokens before we
+        # open or merge any PR, so the pipeline does not stop halfway.
+        remote_url = self.git("remote", "get-url", self.remote, capture=True).strip()
+        if "github.com" in remote_url.lower():
+            gh = supagit_sweep.GhClient(
+                self._gh_run_raw, dry_run=self.options.dry_run
+            )
+            try:
+                gh.ensure_ready()
+            except supagit_sweep.SweepError as exc:
+                raise ShipError(str(exc)) from exc
         self.announce_launch_checkout()
 
     def validate_pipeline_head(self) -> None:

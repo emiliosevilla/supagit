@@ -541,21 +541,89 @@ class MenuTests(unittest.TestCase):
 
 
 class GhClientTests(unittest.TestCase):
+    def test_ensure_ready_refreshes_stale_token(self) -> None:
+        calls: list[list[str]] = []
+        attempts = {"status": 0}
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:3] == ["gh", "auth", "status"]:
+                attempts["status"] += 1
+                if attempts["status"] == 1:
+                    raise RuntimeError("token in keyring is invalid")
+                return ""
+            if cmd[:3] == ["gh", "auth", "refresh"]:
+                return ""
+            raise AssertionError(cmd)
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        client.ensure_ready()
+        self.assertEqual(calls[0], ["gh", "auth", "status"])
+        self.assertEqual(calls[1], ["gh", "auth", "refresh", "-h", "github.com"])
+        self.assertEqual(calls[2], ["gh", "auth", "status"])
+
     def test_ensure_ready_fails_when_gh_missing(self) -> None:
         def run_raw(cmd, **kwargs):
             raise FileNotFoundError("gh")
 
         client = supagit_sweep.GhClient(run_raw, dry_run=False)
-        with self.assertRaises(supagit_sweep.SweepError):
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
             client.ensure_ready()
+        self.assertIn("not installed", str(ctx.exception).lower())
 
     def test_ensure_ready_fails_when_gh_unauthenticated(self) -> None:
         def run_raw(cmd, **kwargs):
-            raise RuntimeError("not logged in")
+            raise RuntimeError("network unreachable")
 
         client = supagit_sweep.GhClient(run_raw, dry_run=False)
-        with self.assertRaises(supagit_sweep.SweepError):
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
             client.ensure_ready()
+        self.assertIn("network unreachable", str(ctx.exception))
+
+    def test_merge_pr_retries_auth_and_auto(self) -> None:
+        calls: list[list[str]] = []
+        outcomes = [
+            RuntimeError("base branch policy prohibits the merge"),
+            "",
+        ]
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return ""
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        client.merge_pr(9, admin=True, delete_branch=False)
+        self.assertEqual(
+            calls[0], ["gh", "pr", "merge", "9", "--merge", "--admin"]
+        )
+        self.assertEqual(
+            calls[1],
+            ["gh", "pr", "merge", "9", "--merge", "--auto", "--admin"],
+        )
+
+    def test_merge_pr_refreshes_token_then_retries(self) -> None:
+        calls: list[list[str]] = []
+        outcomes = [
+            RuntimeError("token expired"),
+            "",
+            "",
+        ]
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return ""
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        client.merge_pr(10, admin=True, delete_branch=True)
+        self.assertEqual(calls[0][:4], ["gh", "pr", "merge", "10"])
+        self.assertEqual(calls[1], ["gh", "auth", "refresh", "-h", "github.com"])
+        self.assertEqual(calls[2][:4], ["gh", "pr", "merge", "10"])
 
     def test_ensure_github_remote_rejects_non_github(self) -> None:
         client = supagit_sweep.GhClient(lambda *a, **k: "", dry_run=False)
@@ -1668,6 +1736,7 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_preflight_non_linked_wrong_branch_ok(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(current="feature/x", linked=False)
+        pipeline.run_raw = lambda *a, **k: ""  # type: ignore[method-assign]
         pipeline.preflight_repo()
         self.assertFalse(any(c[0] == "checkout" for c in calls))
         self.assertFalse(any(c[0] == "ls-remote" for c in calls))

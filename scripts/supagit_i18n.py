@@ -79,8 +79,23 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Approve it as code owner (or satisfy the branch rules), then re-run supagit."
         ),
         "error_promote_pr_merge_failed": (
-            "Could not merge pull request #{number} ({source} → {target}) with --admin. "
-            "Check gh auth and repository permissions, then re-run supagit."
+            "Could not merge pull request #{number} ({source} → {target}) after retrying "
+            "authentication refresh and administrator/auto merge. Check `gh auth status` "
+            "and repository permissions, then re-run supagit."
+        ),
+        "error_gh_missing": (
+            "GitHub CLI (gh) is not installed or not on PATH. Install it: {command}"
+        ),
+        "error_gh_not_authenticated": (
+            "GitHub CLI (gh) is not authenticated and the failure is not a stale token: {detail}"
+        ),
+        "error_gh_refresh_failed": (
+            "Tried to refresh the expired GitHub token with `gh auth refresh -h github.com`, "
+            "but it failed: {detail}"
+        ),
+        "error_gh_still_unauthenticated": (
+            "GitHub CLI is still not authenticated after refresh: {detail}. "
+            "Run `gh auth login` once, then re-run supagit."
         ),
         "explain_cleanup": (
             "Optional step: remove worktrees and branches that were already merged "
@@ -430,8 +445,23 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "supagit."
         ),
         "error_promote_pr_merge_failed": (
-            "No se pudo fusionar el pull request #{number} ({source} → {target}) con --admin. "
-            "Revisa gh auth y los permisos del repositorio, y vuelve a ejecutar supagit."
+            "No se pudo fusionar el pull request #{number} ({source} → {target}) tras "
+            "reintentar refresco de autenticación y merge con administrador/auto. "
+            "Revisa `gh auth status` y los permisos del repositorio, y vuelve a ejecutar supagit."
+        ),
+        "error_gh_missing": (
+            "GitHub CLI (gh) no está instalado o no está en PATH. Instálalo: {command}"
+        ),
+        "error_gh_not_authenticated": (
+            "GitHub CLI (gh) no está autenticado y el fallo no es un token caducado: {detail}"
+        ),
+        "error_gh_refresh_failed": (
+            "Intenté refrescar el token de GitHub con `gh auth refresh -h github.com`, "
+            "pero falló: {detail}"
+        ),
+        "error_gh_still_unauthenticated": (
+            "GitHub CLI sigue sin autenticar tras el refresh: {detail}. "
+            "Ejecuta `gh auth login` una vez y vuelve a lanzar supagit."
         ),
         "explain_cleanup": (
             "Paso opcional: eliminar worktrees y ramas ya fusionadas que se pueden borrar con seguridad."

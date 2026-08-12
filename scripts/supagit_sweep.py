@@ -329,15 +329,66 @@ class GhClient:
         self._run_raw = run_raw
         self._dry_run = dry_run
 
+    def _run(self, command: list[str]) -> str:
+        return self._run_raw(command)
+
+    def _run_status(self, command: list[str]) -> tuple[int, str, str]:
+        """Run without raising; return (returncode, stdout, stderr)."""
+        try:
+            out = self._run_raw(command)
+            return 0, out, ""
+        except Exception as exc:
+            # run_raw in supagit collapses stdout/stderr into the exception text.
+            return 1, "", str(exc)
+
     def ensure_ready(self) -> None:
+        """Ensure gh works; refresh expired tokens automatically.
+
+        When the keyring token is stale, `gh auth status` fails even though the
+        user previously logged in. Try `gh auth refresh -h github.com` once and
+        re-check before failing closed.
+        """
         if self._dry_run:
             return
         try:
-            self._run_raw(["gh", "auth", "status"])
+            self._run(["gh", "auth", "status"])
+            return
         except FileNotFoundError as exc:
-            raise SweepError("GitHub CLI (gh) is not installed or not on PATH.") from exc
+            raise SweepError(
+                t(
+                    "error_gh_missing",
+                    command="brew install gh   # macOS",
+                )
+            ) from exc
         except Exception as exc:
-            raise SweepError("GitHub CLI (gh) is not authenticated.") from exc
+            detail = str(exc)
+            lowered = detail.lower()
+            if not any(
+                marker in lowered
+                for marker in ("token", "auth", "logged in", "keyring")
+            ):
+                raise SweepError(
+                    t("error_gh_not_authenticated", detail=detail)
+                ) from exc
+        # Stale/expired token — attempt silent refresh, then verify.
+        try:
+            self._run(["gh", "auth", "refresh", "-h", "github.com"])
+        except Exception as exc:
+            raise SweepError(
+                t(
+                    "error_gh_refresh_failed",
+                    detail=str(exc),
+                )
+            ) from exc
+        try:
+            self._run(["gh", "auth", "status"])
+        except Exception as exc:
+            raise SweepError(
+                t(
+                    "error_gh_still_unauthenticated",
+                    detail=str(exc),
+                )
+            ) from exc
 
     def ensure_github_remote(self, remote_url: str) -> None:
         normalized = remote_url.lower()
@@ -428,7 +479,47 @@ class GhClient:
             command.append("--admin")
         if delete_branch:
             command.append("--delete-branch")
-        self._run_raw(command)
+        first_exc: Exception
+        try:
+            self._run(command)
+            return
+        except Exception as exc:
+            first_exc = exc
+
+        detail = str(first_exc).lower()
+        authish = any(
+            marker in detail
+            for marker in ("token", "auth", "permission", "forbidden", "403")
+        )
+        policyish = "policy" in detail or "not mergeable" in detail
+
+        # Auth/permission failure: refresh token once, then retry the same merge.
+        if authish:
+            try:
+                self._run(["gh", "auth", "refresh", "-h", "github.com"])
+            except Exception:
+                pass
+            try:
+                self._run(command)
+                return
+            except Exception:
+                raise first_exc
+
+        # Branch-policy block: try enabling auto-merge so GitHub merges once
+        # required checks turn green instead of hard-failing.
+        if policyish:
+            auto_cmd = ["gh", "pr", "merge", str(number), "--merge", "--auto"]
+            if admin:
+                auto_cmd.append("--admin")
+            if delete_branch:
+                auto_cmd.append("--delete-branch")
+            try:
+                self._run(auto_cmd)
+                return
+            except Exception:
+                raise first_exc
+
+        raise first_exc
 
     def create_promote_pr(self, head: str, base: str, title: str) -> int:
         if self._dry_run:
