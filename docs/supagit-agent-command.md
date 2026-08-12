@@ -86,10 +86,11 @@ worktree (or by updating the ref without checking the feature out onto
 create.
 
 After plan Confirm, phases run in this order: **commit dirty work on the
-current feature if needed** → ensure checkout on `pipeline[0]` → **publish**
-local changes on first (clean behind defers to ff) → integrate features →
-**ff_sync** first (refused while dirty; never `reset --hard` on a dirty tree)
-→ checks / migrate / promote / cleanup.
+current feature if needed** (and auto-add that feature to integrate when the
+new commit is not yet in `pipeline[0]`) → ensure checkout on `pipeline[0]` →
+**publish** local changes on first (clean behind defers to ff) → integrate
+features → **ff_sync** first (refused while dirty; never `reset --hard` on a
+dirty tree) → checks / migrate / promote / cleanup.
 
 ## Promotion phase
 

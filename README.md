@@ -232,6 +232,8 @@ Phase order after plan Confirm:
 
 1. If the current branch is not the first pipeline branch and has uncommitted
    changes, **commit** them on that branch (then the tree is clean enough to move).
+   If that commit leaves the feature ahead of `pipeline[0]`, the run **adds it to
+   integrate** even if the menu had skipped it as already contained.
 2. Ensure checkout on the first pipeline branch.
 3. **Publish** local changes on that branch (commit/push when needed). A clean
    tree that is only behind defers sync to the ff step.
