@@ -224,18 +224,23 @@ printed in cyan (including those cures), followed by a green confirmation
 Selected features are integrated through GitHub pull requests merged into the
 first pipeline branch. The `gh` CLI must be installed and authenticated. Dirty
 feature worktrees are committed and pushed first. Clean feature branches that
-are behind their upstream are fast-forwarded in the correct worktree (or via
-ref update without checking them out onto `pipeline[0]`) before opening a PR.
-Empty `base..head` ranges are refused before `gh pr create`.
+still exist on the remote and are behind their upstream are fast-forwarded in
+the correct worktree (or via ref update without checking them out onto
+`pipeline[0]`) before opening a PR. If the remote feature branch was deleted
+(common after a merged PR), integrate skips that ff and pushes the local branch
+to recreate it. Empty `base..head` ranges are refused before `gh pr create`.
 
 Phase order after plan Confirm:
 
 1. If the current branch is not the first pipeline branch and has uncommitted
    changes, **commit** them on that branch (then the tree is clean enough to move).
+   If that commit leaves the feature ahead of `pipeline[0]`, the run **adds it to
+   integrate** even if the menu had skipped it as already contained.
 2. Ensure checkout on the first pipeline branch.
 3. **Publish** local changes on that branch (commit/push when needed). A clean
    tree that is only behind defers sync to the ff step.
-4. **Integrate** selected features (with feature ff when behind-only).
+4. **Integrate** selected features (with feature ff when behind-only; skip ff when
+   the remote feature branch no longer exists).
 5. **Fast-forward** the first pipeline branch to its remote (ff-only; refused
    while the worktree is dirty; never `reset --hard` on a dirty tree).
 6. Checks, optional migrations, promote adjacent pairs, optional cleanup.

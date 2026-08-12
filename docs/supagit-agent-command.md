@@ -80,16 +80,20 @@ cyan execution plan is printed (cures included), then a green confirmation
 Selected features are integrated via GitHub pull requests merged into
 `pipeline[0]`; the `gh` CLI is required for that path. Dirty feature trees are
 committed and pushed first; secrets in staged paths block commits. Clean
-features that are behind their upstream are fast-forwarded in the correct
-worktree (or by updating the ref without checking the feature out onto
-`pipeline[0]`) before `gh pr create`. Empty `base..head` ranges fail before
+features that still exist on the remote and are behind their upstream are
+fast-forwarded in the correct worktree (or by updating the ref without checking
+the feature out onto `pipeline[0]`) before `gh pr create`. If the remote feature
+branch is gone (typical after GitHub deletes the head of a merged PR), integrate
+skips that ff and pushes the local branch. Empty `base..head` ranges fail before
 create.
 
 After plan Confirm, phases run in this order: **commit dirty work on the
-current feature if needed** → ensure checkout on `pipeline[0]` → **publish**
-local changes on first (clean behind defers to ff) → integrate features →
-**ff_sync** first (refused while dirty; never `reset --hard` on a dirty tree)
-→ checks / migrate / promote / cleanup.
+current feature if needed** (and auto-add that feature to integrate when the
+new commit is not yet in `pipeline[0]`) → ensure checkout on `pipeline[0]` →
+**publish** local changes on first (clean behind defers to ff) → integrate
+features (ff only if the remote feature still exists) → **ff_sync** first
+(refused while dirty; never `reset --hard` on a dirty tree) → checks / migrate /
+promote / cleanup.
 
 ## Promotion phase
 

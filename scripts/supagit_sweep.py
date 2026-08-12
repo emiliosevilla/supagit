@@ -530,6 +530,30 @@ def assert_commits_for_pr(
     return count
 
 
+def remote_heads_exist(
+    run_git: GitRunner,
+    remote: str,
+    branch: str,
+    *,
+    cwd: Path | None = None,
+) -> bool:
+    """True when ``remote`` currently has ``refs/heads/branch`` (live ls-remote)."""
+    kw: dict = {}
+    if cwd is not None:
+        kw["cwd"] = cwd
+    try:
+        out = run_git(
+            "ls-remote",
+            "--heads",
+            remote,
+            f"refs/heads/{branch}",
+            **kw,
+        )
+    except Exception:
+        return False
+    return bool(out.strip())
+
+
 def push_branch(
     run_git: GitRunner,
     remote: str,
@@ -583,7 +607,10 @@ def integrate_branch(
             reject_sensitive=reject_sensitive,
             dry_run=dry_run,
         )
-    else:
+    elif remote_heads_exist(run_git, remote, branch, cwd=cwd):
+        # Fast-forward only when the remote feature still exists. After a merged
+        # PR GitHub often deletes the head branch; a stale origin/<feature> must
+        # not block republishing via push + new PR.
         ff_sync_branch(
             run_git,
             branch,
