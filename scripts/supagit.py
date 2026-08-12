@@ -1680,7 +1680,12 @@ class Pipeline:
             self.tutor_confirm(t("explain_cleanup"), t("confirm_cleanup"))
         elif self.options.yes and self.options.cleanup is True:
             pass
-        supagit_sweep.apply_cleanup(self._sweep_git, plan, dry_run=self.options.dry_run)
+        supagit_sweep.apply_cleanup(
+            self._sweep_git,
+            plan,
+            dry_run=self.options.dry_run,
+            into=self.dev,
+        )
 
     def run(self) -> None:
         if not self.options.no_sweep:

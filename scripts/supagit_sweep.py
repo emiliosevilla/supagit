@@ -657,11 +657,40 @@ def plan_cleanup(
     return CleanupPlan(items=tuple(items))
 
 
+def delete_merged_local_branch(
+    run_git: GitRunner,
+    name: str,
+    *,
+    into: str,
+    dry_run: bool,
+) -> None:
+    """Delete a local branch only after verifying it is merged into ``into``.
+
+    After a GitHub PR merge, local ``work`` often matches ``main`` while still
+    being ahead of a stale ``origin/work``. Plain ``git branch -d`` then refuses
+    even though the branch is safely contained in HEAD. Force-delete (``-D``) is
+    only used after the ancestor check.
+    """
+    try:
+        run_git("merge-base", "--is-ancestor", name, into)
+    except Exception as exc:
+        raise SweepError(
+            t("error_cleanup_not_merged", branch=name, base=into)
+        ) from exc
+    if dry_run:
+        return
+    try:
+        run_git("branch", "-d", name)
+    except Exception:
+        run_git("branch", "-D", name)
+
+
 def apply_cleanup(
     run_git: GitRunner,
     plan: CleanupPlan,
     *,
     dry_run: bool,
+    into: str = "HEAD",
 ) -> None:
     worktrees = [item for item in plan.items if item.kind == "worktree"]
     branches = [item for item in plan.items if item.kind == "local-branch"]
@@ -674,6 +703,6 @@ def apply_cleanup(
         run_git("worktree", "remove", str(item.path))
 
     for item in branches:
-        if dry_run:
-            continue
-        run_git("branch", "-d", item.name)
+        delete_merged_local_branch(
+            run_git, item.name, into=into, dry_run=dry_run
+        )
