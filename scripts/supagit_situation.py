@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 from supagit_i18n import t
 
@@ -31,22 +32,65 @@ class SituationError(RuntimeError):
     pass
 
 
-def sequencer_state(git, *, cwd: str | None = None) -> SequencerKind | None:
-    """Return in-progress merge/rebase/cherry-pick kind, or None if clean."""
-    kw: dict = {}
-    if cwd is not None:
-        kw["cwd"] = cwd
-    checks = (
-        ("MERGE_HEAD", SequencerKind.MERGE),
-        ("REBASE_HEAD", SequencerKind.REBASE),
-        ("CHERRY_PICK_HEAD", SequencerKind.CHERRY_PICK),
-    )
-    for head, kind in checks:
+def _git_kw(cwd: str | None) -> dict:
+    return {"cwd": cwd} if cwd is not None else {}
+
+
+def _git_path(git, *parts: str, cwd: str | None = None) -> Path:
+    kw = _git_kw(cwd)
+    raw = git("rev-parse", "--git-path", *parts, capture=True, **kw).strip()
+    path = Path(raw)
+    if not path.is_absolute():
+        base = Path(cwd) if cwd is not None else Path.cwd()
+        path = (base / path).resolve()
+    return path
+
+
+def _rebase_in_progress(git, *, cwd: str | None = None) -> bool:
+    """True only when Git's rebase sequencer dirs exist (not a stale REBASE_HEAD)."""
+    for name in ("rebase-merge", "rebase-apply"):
         try:
-            git("rev-parse", "--verify", head, **kw)
-            return kind
+            if _git_path(git, name, cwd=cwd).is_dir():
+                return True
         except Exception:
             continue
+    return False
+
+
+def clear_stale_sequencer_markers(
+    git, *, cwd: str | None = None, dry_run: bool = False
+) -> tuple[str, ...]:
+    """Drop orphan sequencer markers when Git reports no active operation."""
+    kw = _git_kw(cwd)
+    cleared: list[str] = []
+    if not _rebase_in_progress(git, cwd=cwd):
+        try:
+            git("rev-parse", "--verify", "REBASE_HEAD", **kw)
+            path = _git_path(git, "REBASE_HEAD", cwd=cwd)
+            if path.is_file():
+                if not dry_run:
+                    path.unlink()
+                cleared.append("REBASE_HEAD")
+        except Exception:
+            pass
+    return tuple(cleared)
+
+
+def sequencer_state(git, *, cwd: str | None = None) -> SequencerKind | None:
+    """Return in-progress merge/rebase/cherry-pick kind, or None if clean."""
+    kw = _git_kw(cwd)
+    try:
+        git("rev-parse", "--verify", "MERGE_HEAD", **kw)
+        return SequencerKind.MERGE
+    except Exception:
+        pass
+    if _rebase_in_progress(git, cwd=cwd):
+        return SequencerKind.REBASE
+    try:
+        git("rev-parse", "--verify", "CHERRY_PICK_HEAD", **kw)
+        return SequencerKind.CHERRY_PICK
+    except Exception:
+        pass
     return None
 
 

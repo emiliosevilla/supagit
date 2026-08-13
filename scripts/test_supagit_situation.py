@@ -199,12 +199,58 @@ class SequencerStateTests(unittest.TestCase):
         self.assertEqual(SIT.sequencer_state(git), SIT.SequencerKind.MERGE)
 
     def test_detects_rebase_head(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            rebase_merge = Path(td) / "rebase-merge"
+            rebase_merge.mkdir()
+
+            def git(*args, **kwargs):
+                if list(args)[:2] == ["rev-parse", "--git-path"] and args[2] == "rebase-merge":
+                    return f"{rebase_merge}\n"
+                if list(args)[:2] == ["rev-parse", "--git-path"] and args[2] == "rebase-apply":
+                    return f"{Path(td) / 'rebase-apply'}\n"
+                raise RuntimeError("missing")
+
+            self.assertEqual(SIT.sequencer_state(git), SIT.SequencerKind.REBASE)
+
+    def test_stale_rebase_head_not_detected(self) -> None:
         def git(*args, **kwargs):
             if list(args)[:2] == ["rev-parse", "--verify"] and args[2] == "REBASE_HEAD":
                 return "abc\n"
+            if list(args)[:2] == ["rev-parse", "--verify"] and args[2] in {
+                "MERGE_HEAD",
+                "CHERRY_PICK_HEAD",
+            }:
+                raise RuntimeError("missing")
+            if list(args)[:2] == ["rev-parse", "--git-path"]:
+                return f"/nonexistent/{args[2]}\n"
             raise RuntimeError("missing")
 
-        self.assertEqual(SIT.sequencer_state(git), SIT.SequencerKind.REBASE)
+        self.assertIsNone(SIT.sequencer_state(git))
+
+    def test_clear_stale_rebase_head(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            rebase_head = Path(td) / "REBASE_HEAD"
+            rebase_head.write_text("deadbeef\n", encoding="utf-8")
+
+            def git(*args, **kwargs):
+                if list(args)[:2] == ["rev-parse", "--verify"] and args[2] == "REBASE_HEAD":
+                    return "deadbeef\n"
+                if list(args)[:2] == ["rev-parse", "--git-path"] and args[2] == "REBASE_HEAD":
+                    return f"{rebase_head}\n"
+                if list(args)[:2] == ["rev-parse", "--git-path"] and args[2] in {
+                    "rebase-merge",
+                    "rebase-apply",
+                }:
+                    return f"{Path(td) / args[2]}\n"
+                raise RuntimeError("missing")
+
+            cleared = SIT.clear_stale_sequencer_markers(git)
+            self.assertEqual(cleared, ("REBASE_HEAD",))
+            self.assertFalse(rebase_head.is_file())
 
     def test_detects_cherry_pick_head(self) -> None:
         def git(*args, **kwargs):

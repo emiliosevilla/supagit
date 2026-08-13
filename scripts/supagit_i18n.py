@@ -340,6 +340,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "sequencer_left_in_progress": (
             "Left the unfinished {kind} as-is. Finish or abort it, then re-run supagit."
         ),
+        "sequencer_stale_cleared": (
+            "Removed stale sequencer marker(s): {markers}."
+        ),
         "explain_secrets_gitignore": (
             "I found potential secrets in the working tree and will leave them unstaged: "
             "{paths}. I can add these ignore patterns so they stay out of future commits: "
@@ -828,6 +831,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "sequencer_aborted": "He abortado el {kind} a medias.",
         "sequencer_left_in_progress": (
             "He dejado el {kind} a medias como estaba. Termínalo o abortalo y vuelve a ejecutar supagit."
+        ),
+        "sequencer_stale_cleared": (
+            "He eliminado marcador(es) de sequencer obsoletos: {markers}."
         ),
         "explain_secrets_gitignore": (
             "He encontrado posibles secretos en el árbol de trabajo y los dejaré sin stage: "

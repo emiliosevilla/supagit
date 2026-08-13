@@ -3870,6 +3870,8 @@ class OrchestrationTests(unittest.TestCase):
         self.assertLess(abort_idx, fetch_idx)
 
     def test_preflight_rebase_head_abort_declined_raises(self) -> None:
+        import tempfile
+
         pipeline, calls, _ = self._pipeline_for_reposition(
             current="main", linked=False, yes=False
         )
@@ -3878,19 +3880,27 @@ class OrchestrationTests(unittest.TestCase):
 
         original_git = pipeline.git
 
-        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
-            if args[:2] == ("rev-parse", "--verify") and args[2] == "REBASE_HEAD":
-                return "deadbeef\n"
-            if args[:2] == ("rev-parse", "--verify") and args[2] in {
-                "MERGE_HEAD",
-                "CHERRY_PICK_HEAD",
-            }:
-                raise ENGINE.ShipError(f"missing {args[2]}")
-            return original_git(*args, capture=capture, check=check, mutating=mutating, cwd=cwd)
+        with tempfile.TemporaryDirectory() as td:
+            rebase_merge = Path(td) / "rebase-merge"
+            rebase_merge.mkdir()
 
-        pipeline.git = git  # type: ignore[method-assign]
-        with self.assertRaises(ENGINE.UserAborted):
-            pipeline.preflight_repo()
+            def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+                if args[:2] == ("rev-parse", "--git-path") and args[2] == "rebase-merge":
+                    return f"{rebase_merge}\n"
+                if args[:2] == ("rev-parse", "--git-path") and args[2] == "rebase-apply":
+                    return f"{Path(td) / 'rebase-apply'}\n"
+                if args[:2] == ("rev-parse", "--verify") and args[2] in {
+                    "MERGE_HEAD",
+                    "CHERRY_PICK_HEAD",
+                }:
+                    raise ENGINE.ShipError(f"missing {args[2]}")
+                return original_git(
+                    *args, capture=capture, check=check, mutating=mutating, cwd=cwd
+                )
+
+            pipeline.git = git  # type: ignore[method-assign]
+            with self.assertRaises(ENGINE.UserAborted):
+                pipeline.preflight_repo()
         self.assertFalse(any(c[:2] == ("rebase", "--abort") for c in calls))
 
     def test_announce_launch_checkout_explains_no_manual_switch(self) -> None:

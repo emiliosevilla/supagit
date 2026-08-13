@@ -916,6 +916,16 @@ class Pipeline:
 
     def _resolve_sequencer_preflight(self) -> None:
         """Tutor abort/continue for mid-merge/rebase/cherry-pick before mutations."""
+        cleared = supagit_situation.clear_stale_sequencer_markers(
+            self._situation_git,
+            cwd=str(self.root),
+            dry_run=self.options.dry_run,
+        )
+        if cleared:
+            self.status(
+                t("sequencer_stale_cleared", markers=", ".join(cleared)),
+                self.GREEN,
+            )
         kind = supagit_situation.sequencer_state(
             self._situation_git, cwd=str(self.root)
         )
