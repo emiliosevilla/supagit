@@ -27,6 +27,7 @@ import supagit_inventory
 import supagit_layout
 import supagit_menu
 import supagit_situation
+import supagit_supabase
 import supagit_sweep
 import supagit_update
 from supagit_busy import BusySpinner, print_welcome
@@ -127,6 +128,41 @@ def confirm_default_yes(message: str, *, colour_on: bool) -> None:
     raise UserAborted(t("user_aborted"))
 
 
+def _environment_keys_for_pipeline(branch_names: Sequence[str] | None) -> list[str]:
+    """Environment keys follow real pipeline branch names (or legacy role names)."""
+    if branch_names:
+        return [name.strip() for name in branch_names if name and str(name).strip()]
+    return ["dev", "pre", "prod"]
+
+
+def _environments_for_pipeline(
+    branch_names: Sequence[str] | None,
+    pre_ref_env: str,
+    prod_ref_env: str,
+) -> dict[str, dict[str, str]]:
+    """Key Supabase environments by pipeline branch names, not fixed pre/prod labels."""
+    names = _environment_keys_for_pipeline(branch_names)
+    if not names:
+        names = ["dev", "pre", "prod"]
+    if len(names) == 1:
+        return {names[0]: {"project_ref_env": prod_ref_env}}
+    if len(names) == 2:
+        return {
+            names[0]: {"project_ref_env": pre_ref_env},
+            names[1]: {"project_ref_env": prod_ref_env},
+        }
+    environments: dict[str, dict[str, str]] = {}
+    for index, name in enumerate(names):
+        if index == len(names) - 2:
+            environments[name] = {"project_ref_env": pre_ref_env}
+        elif index == len(names) - 1:
+            environments[name] = {"project_ref_env": prod_ref_env}
+        else:
+            token = re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_") or "APP"
+            environments[name] = {"project_ref_env": f"SUPABASE_{token}_PROJECT_REF"}
+    return environments
+
+
 def init_project_config(
     backend: str,
     pre_ref_env: str,
@@ -150,10 +186,9 @@ def init_project_config(
             "provider": "supabase",
             "cli": "supabase",
             "auto_detect": True,
-            "environments": {
-                "pre": {"project_ref_env": pre_ref_env},
-                "prod": {"project_ref_env": prod_ref_env},
-            },
+            "environments": _environments_for_pipeline(
+                branch_names, pre_ref_env, prod_ref_env
+            ),
         }
     return config
 
@@ -849,6 +884,12 @@ class Pipeline:
             self.warning("registered worktrees exist, but the current checkout is the main repository.")
         print(f"Repository: {self.project_name}")
         self.git("remote", "get-url", self.remote)
+        # Resolve mid-merge/rebase first (read-only detect + tutor). An
+        # unreachable remote must not skip the abort/continue gate.
+        self._resolve_sequencer_preflight()
+        # Drop deleted remote-tracking refs before sync classification so
+        # stale origin/* cannot mislabel ahead/behind.
+        self.git("fetch", "--prune", self.remote, mutating=True)
         # Measure GitHub CLI health up front; refresh stale tokens before we
         # open or merge any PR, so the pipeline does not stop halfway.
         remote_url = self.git("remote", "get-url", self.remote, capture=True).strip()
@@ -860,7 +901,42 @@ class Pipeline:
                 gh.ensure_ready()
             except supagit_sweep.SweepError as exc:
                 raise ShipError(str(exc)) from exc
+        # Measure Supabase CLI health up front when the project uses it, so a
+        # missing install or expired login fails before database_checkpoint.
+        if self.backend.provider == "supabase" and self.cli:
+            try:
+                supagit_supabase.ensure_supabase_ready(
+                    self.cli,
+                    dry_run=self.options.dry_run,
+                    run_raw=self._supabase_run_raw,
+                )
+            except supagit_supabase.SupabaseError as exc:
+                raise ShipError(str(exc)) from exc
         self.announce_launch_checkout()
+
+    def _resolve_sequencer_preflight(self) -> None:
+        """Tutor abort/continue for mid-merge/rebase/cherry-pick before mutations."""
+        kind = supagit_situation.sequencer_state(
+            self._situation_git, cwd=str(self.root)
+        )
+        if kind is None:
+            return
+        label = t(f"sequencer_kind_{kind.value}")
+        self.explain(
+            t("explain_sequencer_in_progress", kind=label),
+            ask_continue=False,
+        )
+        if not self.ask_yes_no(
+            t("confirm_sequencer_abort", kind=label), default_yes=True
+        ):
+            raise UserAborted(t("sequencer_left_in_progress", kind=label))
+        abort_args = {
+            supagit_situation.SequencerKind.MERGE: ("merge", "--abort"),
+            supagit_situation.SequencerKind.REBASE: ("rebase", "--abort"),
+            supagit_situation.SequencerKind.CHERRY_PICK: ("cherry-pick", "--abort"),
+        }[kind]
+        self.git(*abort_args, mutating=True, cwd=self.root)
+        self.status(t("sequencer_aborted", kind=label), self.GREEN)
 
     def validate_pipeline_head(self) -> None:
         self.git(
@@ -916,14 +992,108 @@ class Pipeline:
             return True
         return name.endswith((".pem", ".key", ".p12", ".pfx"))
 
-    def _reject_sensitive_paths(self, paths: Sequence[str]) -> None:
+    @classmethod
+    def _gitignore_patterns_for(cls, sensitive_paths: Sequence[str]) -> list[str]:
+        patterns: list[str] = []
+        seen: set[str] = set()
+
+        def add(pattern: str) -> None:
+            if pattern not in seen:
+                seen.add(pattern)
+                patterns.append(pattern)
+
+        for path in sensitive_paths:
+            name = path.replace("\\", "/").rsplit("/", 1)[-1]
+            lower = name.lower()
+            if lower == ".env" or (
+                lower.startswith(".env.")
+                and lower not in {".env.example", ".env.sample", ".env.template"}
+            ):
+                add(".env*")
+            elif lower.endswith((".pem", ".key", ".p12", ".pfx")):
+                add(f"*{Path(name).suffix.lower()}")
+            else:
+                add(name)
+        return patterns
+
+    @staticmethod
+    def _append_gitignore_patterns(root: Path, patterns: Sequence[str]) -> bool:
+        if not patterns:
+            return False
+        gitignore = root / ".gitignore"
+        existing: set[str] = set()
+        previous = ""
+        if gitignore.exists():
+            previous = gitignore.read_text(encoding="utf-8")
+            existing = {
+                line.strip()
+                for line in previous.splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            }
+        to_add = [pattern for pattern in patterns if pattern not in existing]
+        if not to_add:
+            return False
+        chunk = "\n".join(["", "# added by supagit", *to_add, ""])
+        if previous and not previous.endswith("\n"):
+            chunk = "\n" + chunk.lstrip("\n")
+        elif not previous:
+            chunk = chunk.lstrip("\n")
+        with gitignore.open("a", encoding="utf-8") as handle:
+            handle.write(chunk)
+        return True
+
+    def _reject_sensitive_paths(
+        self, paths: Sequence[str], cwd: Path | None = None
+    ) -> Sequence[str]:
+        """Exclude secrets from staging; optionally append .gitignore patterns.
+
+        Returns paths that are safe to `git add`. Raises only when every path is
+        sensitive (nothing left to commit).
+        """
+        root = cwd if cwd is not None else self.root
         sensitive = sorted({path for path in paths if self._is_sensitive_path(path)})
-        if sensitive:
+        safe = [path for path in paths if not self._is_sensitive_path(path)]
+        if not sensitive:
+            return list(paths)
+        if not safe:
             raise ShipError(
-                "Potential secrets detected among the changes: "
-                + ", ".join(sensitive)
-                + ". Remove them from the commit and run the pipeline again."
+                t(
+                    "error_only_secrets",
+                    paths=", ".join(sensitive),
+                )
             )
+
+        patterns = self._gitignore_patterns_for(sensitive)
+        self.explain(
+            t(
+                "explain_secrets_gitignore",
+                paths=", ".join(sensitive),
+                patterns=", ".join(patterns),
+            ),
+            ask_continue=False,
+        )
+        appended = False
+        gitignore = root / ".gitignore"
+        existing: set[str] = set()
+        if gitignore.exists():
+            existing = {
+                line.strip()
+                for line in gitignore.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            }
+        missing = [pattern for pattern in patterns if pattern not in existing]
+        if missing and self.ask_yes_no(
+            t("confirm_secrets_gitignore"), default_yes=True
+        ):
+            if not self.options.dry_run:
+                appended = self._append_gitignore_patterns(root, missing)
+                if appended:
+                    self.status(t("secrets_gitignore_updated"), self.GREEN)
+
+        result = list(safe)
+        if appended and ".gitignore" not in result:
+            result.append(".gitignore")
+        return result
 
     def _commit_message(self, *, branch: str | None = None) -> str:
         label = branch or self.dev
@@ -972,7 +1142,11 @@ class Pipeline:
         print(f"\n=== PUBLISH LOCAL CHANGES TO {self.dev} ===")
         status = self.git("status", "--porcelain", capture=True)
         status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
-        self._reject_sensitive_paths(status_paths)
+        safe_paths = (
+            list(self._reject_sensitive_paths(status_paths, cwd=self.root))
+            if status_paths
+            else []
+        )
 
         if status.strip() and integrate:
             raise ShipError(
@@ -984,14 +1158,31 @@ class Pipeline:
             )
 
         if status.strip():
+            if not safe_paths:
+                raise ShipError(t("error_only_secrets_remaining"))
             message = self._commit_message()
             self.tutor_confirm(
                 t("explain_commit_publish", branch=self.dev, remote=self.remote),
                 t("confirm_commit_publish", branch=self.dev, remote=self.remote),
             )
-            self.git("add", "-A", mutating=True)
+            self.git("add", "--", *safe_paths, mutating=True)
             staged = self.git("diff", "--cached", "--name-only", capture=True)
-            self._reject_sensitive_paths(staged.splitlines())
+            staged_paths = [path for path in staged.splitlines() if path]
+            leaked = [path for path in staged_paths if self._is_sensitive_path(path)]
+            if leaked:
+                # Exclude pre-staged secrets; keep committing any remaining safe paths.
+                self.git("restore", "--staged", "--", *leaked, mutating=True)
+                staged = self.git("diff", "--cached", "--name-only", capture=True)
+                staged_paths = [path for path in staged.splitlines() if path]
+            if not staged_paths:
+                raise ShipError(t("error_only_secrets_remaining"))
+            still_sensitive = [
+                path for path in staged_paths if self._is_sensitive_path(path)
+            ]
+            if still_sensitive:
+                raise ShipError(
+                    t("error_only_secrets", paths=", ".join(sorted(still_sensitive)))
+                )
             self.git("diff", "--cached", "--check")
             self.git("commit", "-m", message, mutating=True)
             relation = self.git(
@@ -1003,14 +1194,35 @@ class Pipeline:
             ).strip()
             remote_only, local_only = (int(part) for part in relation.split())
             if remote_only > 0:
+                # Dirty-behind: rebase local commit(s) onto upstream before push.
+                # Skipping push here would leave ahead+behind; later ff_only refuses.
                 print(
                     t(
-                        "publish_skip_push_behind",
+                        "publish_rebase_behind",
                         branch=self.dev,
                         remote=self.remote,
                     )
                 )
-                return
+                try:
+                    self.git(
+                        "pull",
+                        "--rebase",
+                        self.remote,
+                        self.dev,
+                        mutating=True,
+                    )
+                except Exception as exc:
+                    try:
+                        self.git("rebase", "--abort", mutating=True)
+                    except Exception:
+                        pass
+                    raise ShipError(
+                        t(
+                            "error_rebase_conflict",
+                            branch=self.dev,
+                            base_ref=f"{self.remote}/{self.dev}",
+                        )
+                    ) from exc
         else:
             relation = self.git(
                 "rev-list",
@@ -1086,32 +1298,67 @@ class Pipeline:
         print(f"\n=== DATABASE {label}: {project_ref} ===")
         self.link_supabase(project_ref)
         try:
-            dry_output = self.run_raw(
-                [self.cli, "db", "push", "--dry-run", "--linked", "--include-all"],
-                capture=True,
-                mutating=True,
-            )
-            if not self.options.dry_run and "Remote database is up to date" not in dry_output:
-                self.tutor_confirm(
-                    t("explain_migrate", label=label, ref=project_ref),
-                    t("confirm_migrate", label=label, ref=project_ref),
+            try:
+                dry_output = self.run_raw(
+                    [self.cli, "db", "push", "--dry-run", "--linked", "--include-all"],
+                    capture=True,
+                    mutating=True,
                 )
-            self.run_raw(
-                [self.cli, "db", "push", "--linked", "--yes", "--include-all"],
-                mutating=True,
-            )
-            verify = self.run_raw(
-                [self.cli, "db", "push", "--dry-run", "--linked", "--include-all"],
-                capture=True,
-                mutating=True,
-            )
-            if not self.options.dry_run and "Remote database is up to date" not in verify:
-                raise ShipError(f"The post-migration check does not confirm that {label} is up to date.")
+                if not self.options.dry_run and "Remote database is up to date" not in dry_output:
+                    self.tutor_confirm(
+                        t("explain_migrate", label=label, ref=project_ref),
+                        t("confirm_migrate", label=label, ref=project_ref),
+                    )
+                self.run_raw(
+                    [self.cli, "db", "push", "--linked", "--yes", "--include-all"],
+                    mutating=True,
+                )
+                verify = self.run_raw(
+                    [self.cli, "db", "push", "--dry-run", "--linked", "--include-all"],
+                    capture=True,
+                    mutating=True,
+                )
+                if not self.options.dry_run and "Remote database is up to date" not in verify:
+                    raise ShipError(
+                        t("error_database_checkpoint_stale", label=label)
+                    )
+                if not self.options.dry_run:
+                    list_output = self.run_raw(
+                        [self.cli, "migration", "list", "--linked"],
+                        capture=True,
+                        mutating=False,
+                    )
+                    local = supagit_supabase.local_migration_versions(
+                        self.root / "supabase" / "migrations"
+                    )
+                    remote = supagit_supabase.parse_migration_list_remote(list_output)
+                    try:
+                        supagit_supabase.assert_migration_state_matches(
+                            local=local,
+                            remote=remote,
+                            label=label,
+                        )
+                    except supagit_supabase.SupabaseError as exc:
+                        raise ShipError(str(exc)) from exc
+            except ShipError:
+                # Fail-closed: never let a failed migrate continue into Git merge / CI.
+                raise
+            except Exception as exc:
+                raise ShipError(
+                    t("error_database_checkpoint", label=label, detail=str(exc))
+                ) from exc
         finally:
             self.unlink_supabase()
 
     def fetch_branch(self, branch: str) -> None:
-        self.git("fetch", self.remote, f"refs/heads/{branch}:refs/heads/{branch}", mutating=True)
+        # Never update refs/heads/{branch} from another checkout — Git refuses
+        # when that branch is checked out in any worktree. Remote-tracking only.
+        self.git(
+            "fetch",
+            self.remote,
+            f"refs/heads/{branch}:refs/remotes/{self.remote}/{branch}",
+            mutating=True,
+        )
 
     def promote(self, source: str, target: str) -> None:
         print(f"\n=== CODE {source} → {target} ===")
@@ -1187,22 +1434,33 @@ class Pipeline:
 
     def _promote_direct(self, source: str, target: str) -> None:
         self.fetch_branch(target)
+        # Never force the same branch into two worktrees — merge/push where it lives.
         target_cwd = self._cwd_for_branch(target)
+        held = self._worktree_path_for_branch(target)
+        if held is not None and held != self.main_root.resolve():
+            self.explain(
+                t(
+                    "adopt_first_branch_worktree",
+                    branch=target,
+                    path=str(held),
+                ),
+                ask_continue=False,
+            )
         current = self.git(
             "branch", "--show-current", capture=True, cwd=target_cwd
         ).strip()
         if current != target:
-            locked = self._worktree_path_for_branch(target)
-            if locked is not None and locked != target_cwd.resolve():
-                raise ShipError(
-                    t(
-                        "error_first_branch_in_worktree",
-                        branch=target,
-                        path=str(locked),
-                    )
-                )
             self.git("checkout", target, mutating=True, cwd=target_cwd)
         try:
+            # Fast-forward local target in the adopted worktree (safe to update
+            # refs/heads/{target} here). Do not fetch into that ref from elsewhere.
+            self.git(
+                "merge",
+                "--ff-only",
+                f"{self.remote}/{target}",
+                mutating=True,
+                cwd=target_cwd,
+            )
             self.git("merge", source, "--no-edit", mutating=True, cwd=target_cwd)
             self.git("push", self.remote, target, mutating=True, cwd=target_cwd)
         except Exception:
@@ -1235,7 +1493,7 @@ class Pipeline:
         pr_number = gh.find_open_pr(source, target)
         if pr_number is None:
             try:
-                supagit_sweep.assert_commits_for_pr(
+                count = supagit_sweep.assert_commits_for_pr(
                     self._sweep_git,
                     head=source,
                     base=target,
@@ -1244,13 +1502,22 @@ class Pipeline:
                 )
             except supagit_sweep.SweepError as exc:
                 raise ShipError(str(exc)) from exc
+            if count == 0:
+                raise ShipError(
+                    t(
+                        "error_empty_pr",
+                        head=source,
+                        base=target,
+                        base_ref=f"{self.remote}/{target}",
+                    )
+                )
             title = f"supagit: promote {source} → {target}"
             pr_number = gh.create_promote_pr(source, target, title)
             self.explain(t("promote_pr_created", number=pr_number, source=source, target=target))
         else:
             self.explain(t("promote_pr_reused", number=pr_number, source=source, target=target))
         try:
-            gh.merge_pr(pr_number, admin=True, delete_branch=False)
+            gh.merge_pr(pr_number, delete_branch=False)
         except Exception as exc:
             raise ShipError(
                 t(
@@ -1302,20 +1569,35 @@ class Pipeline:
         self.root = self.main_root
 
     def _backend_target_for_branch(self, branch: str, index: int) -> str | None:
+        """Resolve by exact branch name only — never legacy pre/prod index guessing."""
+        _ = index  # kept for call-site compatibility
         if self.backend.provider != "supabase":
             return None
-        if branch in self.backend.targets:
-            return self.backend.targets[branch]
-        if len(self.branches) == 3:
-            legacy_role = "pre" if index == 1 else "prod" if index == 2 else None
-            if legacy_role and legacy_role in self.backend.targets:
-                return self.backend.targets[legacy_role]
-        return None
+        return self.backend.targets.get(branch)
 
-    def _require_noninteractive_selection(self) -> None:
-        if self.options.yes and not self.options.no_sweep:
-            if self.options.integrate is None or self.options.pipeline_order is None:
-                raise ShipError(t("yes_need_flags"))
+    def _require_noninteractive_selection(self, inventory: RepoInventory) -> None:
+        """Fail closed under --yes only when integrate/pipeline cannot be inferred.
+
+        Unambiguous Enter defaults: at most one pending feature (via
+        ``default_integrate_names`` / ``single_pending_feature``) and the
+        configured pipeline when ``--pipeline`` is omitted. Multiple pending
+        features without ``--integrate`` remain ambiguous.
+        """
+        if not self.options.yes or self.options.no_sweep:
+            return
+        need_integrate = self.options.integrate is None
+        need_pipeline = self.options.pipeline_order is None
+        if not need_integrate and not need_pipeline:
+            return
+        pending = supagit_inventory.default_integrate_names(inventory)
+        only = supagit_menu.single_pending_feature(inventory)
+        # Reuse Task 19 helpers: zero pending or a single pending feature is
+        # unambiguous; multiple pending names require an explicit --integrate.
+        integrate_ok = (not need_integrate) or only is not None or len(pending) == 0
+        pipeline_ok = (not need_pipeline) or bool(self.branches)
+        if integrate_ok and pipeline_ok:
+            return
+        raise ShipError(t("yes_need_flags"))
 
     def _sweep_git(self, *args: str, cwd: Path | None = None, capture: bool = True) -> str:
         return self.git(
@@ -1326,7 +1608,37 @@ class Pipeline:
         )
 
     def _gh_run_raw(self, command: Sequence[str], **kwargs) -> str:
-        return self.run_raw(list(command), capture=True, mutating=True)
+        cmd = [str(part) for part in command]
+        # Interactive login needs a live TTY (no pipes, no spinner).
+        if cmd[:3] == ["gh", "auth", "login"]:
+            rendered = shlex.join(cmd)
+            print(f"$ {rendered}")
+            if self.options.dry_run:
+                return ""
+            completed = subprocess.run(cmd)
+            if completed.returncode != 0:
+                raise ShipError(
+                    f"Command failed: {rendered}: gh auth login exited {completed.returncode}"
+                )
+            return ""
+        return self.run_raw(cmd, capture=True, mutating=True)
+
+    def _supabase_run_raw(self, command: Sequence[str], **kwargs) -> str:
+        cmd = [str(part) for part in command]
+        # Interactive login needs a live TTY (no pipes, no spinner).
+        if len(cmd) >= 2 and cmd[1] == "login":
+            rendered = shlex.join(cmd)
+            print(f"$ {rendered}")
+            if self.options.dry_run:
+                return ""
+            completed = subprocess.run(cmd)
+            if completed.returncode != 0:
+                raise ShipError(
+                    f"Command failed: {rendered}: supabase login exited {completed.returncode}"
+                )
+            return ""
+        return self.run_raw(cmd, capture=True, mutating=True)
+
 
     def build_inventory(self, *, first_branch: str | None = None) -> RepoInventory:
         return supagit_inventory.build_inventory(
@@ -1367,13 +1679,21 @@ class Pipeline:
         return supagit_menu.selection_with_base(inventory, pipeline, integrate_line)
 
     def run_branch_menu(self, inventory: RepoInventory) -> MenuSelection:
-        self._require_noninteractive_selection()
+        self._require_noninteractive_selection(inventory)
         try:
             if self.options.yes:
-                integrate = self.options.integrate or "none"
+                if self.options.integrate is not None:
+                    integrate = self.options.integrate
+                else:
+                    # Empty line → parse_integrate_line uses default_integrate_names.
+                    # (Unambiguous: 0 or 1 pending; multi-pending already failed above.)
+                    integrate = ""
                 pipeline = self.options.pipeline_order or ""
                 selection = self._resolve_selection(
-                    inventory, pipeline, integrate, default_pipeline=()
+                    inventory,
+                    pipeline,
+                    integrate,
+                    default_pipeline=self.branches,
                 )
                 self._explain_situation_preflight(selection, inventory)
             else:
@@ -1390,11 +1710,36 @@ class Pipeline:
                     supagit_menu.classify_menu_branches(inventory)
                 )
                 base = inventory.first_branch
+                only_feature = supagit_menu.single_pending_feature(inventory)
                 if worktrees or other_work:
-                    integrate_line = self.tutor_prompt(
-                        t("explain_integrate", base=base),
-                        t("integrate_prompt"),
-                    )
+                    if only_feature is not None:
+                        self.explain(
+                            t(
+                                "explain_integrate_single",
+                                branch=only_feature,
+                                base=base,
+                            ),
+                            ask_continue=False,
+                        )
+                        # Enter = yes. dry-run keeps the default so the plan
+                        # still shows the merge; force_confirm gates execution.
+                        if self.options.dry_run:
+                            accepted = True
+                        else:
+                            accepted = self.ask_yes_no(
+                                t(
+                                    "confirm_merge_single",
+                                    branch=only_feature,
+                                    base=base,
+                                ),
+                                default_yes=True,
+                            )
+                        integrate_line = only_feature if accepted else "none"
+                    else:
+                        integrate_line = self.tutor_prompt(
+                            t("explain_integrate", base=base),
+                            t("integrate_prompt"),
+                        )
                 else:
                     self.explain(
                         t("explain_integrate_none", base=base),
@@ -1426,12 +1771,19 @@ class Pipeline:
                     interactive=True,
                 )
                 situation = self._explain_situation_preflight(selection, inventory)
+                backend = getattr(self, "backend", None)
+                migrate_targets = (
+                    dict(backend.targets)
+                    if backend is not None and backend.provider == "supabase"
+                    else None
+                )
                 self.explain(
                     supagit_menu.render_execution_plan(
                         selection,
                         first_branch=selection.pipeline[0],
                         remote=self.remote,
                         situation=situation,
+                        migrate_targets=migrate_targets,
                     )
                     + "\n"
                     + t("explain_plan"),
@@ -1626,11 +1978,13 @@ class Pipeline:
             "branch", "--show-current", capture=True, cwd=self.root
         ).strip()
         if current == self.dev:
-            return None
+            return self._commit_dirty_launch_feature()
 
         other = self._first_branch_worktree()
 
         current_label = current
+        rescued_branch: str | None = None
+        unreachable = False
         if current == "":
             sha = self.git(
                 "rev-parse", "--short", "HEAD", capture=True, cwd=self.root
@@ -1643,22 +1997,25 @@ class Pipeline:
                 capture=True,
                 cwd=self.root,
             ).strip()
-            if not contains:
-                raise ShipError(t("error_detached_unreachable", sha=sha))
-            current_label = t("detached_label", sha=sha)
+            unreachable = not contains
+            status = self.git("status", "--porcelain", capture=True, cwd=self.root)
+            if unreachable or status.strip():
+                rescued_branch = f"supagit-rescue-{sha}"
+                self.explain(
+                    t("rescued_detached_head", branch=rescued_branch, sha=sha),
+                    ask_continue=False,
+                )
+                self.git(
+                    "switch", "-c", rescued_branch, mutating=True, cwd=self.root
+                )
+                current = rescued_branch
+                current_label = rescued_branch
+            else:
+                current_label = t("detached_label", sha=sha)
 
         committed_on: str | None = None
         status = self.git("status", "--porcelain", capture=True, cwd=self.root)
         if status.strip():
-            if current == "":
-                raise ShipError(
-                    t(
-                        "error_dirty_reposition",
-                        current=current_label,
-                        target=self.dev,
-                        files=self._format_dirty_paths(status),
-                    )
-                )
             self._commit_dirty_before_reposition(current, status)
             committed_on = current
             if not self.options.dry_run:
@@ -1674,6 +2031,10 @@ class Pipeline:
                             files=self._format_dirty_paths(status),
                         )
                     )
+        elif rescued_branch is not None and unreachable:
+            # Tip was only on detached HEAD — keep the rescue branch in play
+            # so the run can integrate those commits.
+            committed_on = rescued_branch
 
         if other is not None:
             self._adopt_first_branch_worktree(other)
@@ -1686,6 +2047,40 @@ class Pipeline:
         )
         self.git("checkout", self.dev, mutating=True, cwd=self.root)
         return committed_on
+
+    def _commit_dirty_launch_feature(self) -> str | None:
+        """Commit dirty feature work in the launch worktree, if any.
+
+        The main checkout may already sit on pipeline[0] while supagit was
+        launched from a linked worktree holding uncommitted feature work;
+        that work must join the run, not be left behind. Returns the feature
+        branch name when a commit was made so the caller can integrate it.
+        """
+        if self.launch_root.resolve() == self.root.resolve():
+            return None
+        launch_branch = self.git(
+            "branch", "--show-current", capture=True, cwd=self.launch_root
+        ).strip()
+        if not launch_branch or launch_branch in self.branches:
+            return None
+        status = self.git("status", "--porcelain", capture=True, cwd=self.launch_root)
+        if not status.strip():
+            return None
+        self._commit_dirty_before_reposition(launch_branch, status, cwd=self.launch_root)
+        if not self.options.dry_run:
+            remaining = self.git(
+                "status", "--porcelain", capture=True, cwd=self.launch_root
+            )
+            if remaining.strip():
+                raise ShipError(
+                    t(
+                        "error_dirty_reposition",
+                        current=launch_branch,
+                        target=self.dev,
+                        files=self._format_dirty_paths(remaining),
+                    )
+                )
+        return launch_branch
 
     def _extend_integrate_after_pre_commit(
         self, selection: MenuSelection, committed_on: str | None
@@ -1724,10 +2119,14 @@ class Pipeline:
             pipeline=selection.pipeline,
         )
 
-    def _commit_dirty_before_reposition(self, branch: str, status: str) -> None:
+    def _commit_dirty_before_reposition(
+        self, branch: str, status: str, *, cwd: Path | None = None
+    ) -> None:
         """Save uncommitted work on the current feature before moving to pipeline[0]."""
+        work_cwd = cwd if cwd is not None else self.root
         status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
-        self._reject_sensitive_paths(status_paths)
+        # Guard once before prompts: exclude secrets, optional .gitignore append.
+        safe_paths = list(self._reject_sensitive_paths(status_paths, cwd=work_cwd))
         message = self._commit_message(branch=branch)
         self.tutor_confirm(
             t(
@@ -1744,10 +2143,11 @@ class Pipeline:
         try:
             supagit_sweep.commit_dirty_tree(
                 self._sweep_git,
-                cwd=self.root,
+                cwd=work_cwd,
                 message=message,
-                reject_sensitive=self._reject_sensitive_paths,
+                reject_sensitive=lambda paths, c: safe_paths,
                 dry_run=self.options.dry_run,
+                is_sensitive=self._is_sensitive_path,
             )
         except supagit_sweep.SweepError as exc:
             raise ShipError(str(exc)) from exc
@@ -1792,11 +2192,24 @@ class Pipeline:
                     reject_sensitive=self._reject_sensitive_paths,
                     dry_run=self.options.dry_run,
                     contained_in_first=info.contained_in_first,
+                    is_sensitive=self._is_sensitive_path,
+                    explain=lambda message: self.explain(message, ask_continue=False),
+                    confirm_continue=(
+                        (lambda prompt: self.ask_yes_no(prompt, default_yes=True))
+                        if not self.options.yes
+                        else None
+                    ),
+                    open_editor=supagit_sweep.open_conflict_editor,
+                    interactive=bool(
+                        not self.options.yes and sys.stdin.isatty()
+                    ),
                 )
             except supagit_sweep.SweepError as exc:
                 raise ShipError(str(exc)) from exc
 
     def ff_sync_first_branch(self) -> None:
+        # Dirty+behind pipeline[0] rebases inside commit_and_publish_dev
+        # (publish_then_ff). This path is for clean-behind ff_only leftovers.
         try:
             supagit_sweep.ff_sync_branch(
                 self._sweep_git,
@@ -1832,20 +2245,27 @@ class Pipeline:
         )
 
     def run(self) -> None:
-        if not self.options.no_sweep:
-            self._require_noninteractive_selection()
         self.preflight_repo()
         inventory = self.build_inventory()
         if self.options.no_sweep:
             selection = MenuSelection(integrate=(), pipeline=tuple(self.branches))
             self._explain_situation_preflight(selection, inventory)
         else:
+            # --yes flag check runs inside run_branch_menu once inventory exists
+            # so unambiguous defaults (single pending / configured pipeline) can
+            # be inferred without requiring --integrate/--pipeline.
             selection = self.run_branch_menu(inventory)
         self.apply_menu_selection(selection)
         committed_on = self.ensure_checkout_on_first_branch()
         selection = self._extend_integrate_after_pre_commit(selection, committed_on)
         self.validate_pipeline_head()
         inventory = self.build_inventory()
+        first_branch = self.branches[0]
+        first_ref = self._backend_target_for_branch(first_branch, 0)
+        if self.backend.provider == "supabase" and first_ref:
+            self.database_checkpoint(first_branch, first_ref)
+        elif self.backend.provider == "supabase":
+            raise ShipError(t("error_migrate_no_target", branch=first_branch))
         self.commit_and_publish_dev(integrate=selection.integrate)
         if selection.integrate:
             self.sweep_features(selection, inventory)
@@ -1865,7 +2285,7 @@ class Pipeline:
             if self.backend.provider == "supabase" and project_ref:
                 self.database_checkpoint(target, project_ref)
             elif self.backend.provider == "supabase":
-                print(f"No database migration target configured for branch {target}; skipping checkpoint.")
+                raise ShipError(t("error_migrate_no_target", branch=target))
             self.promote(source, target)
         self.return_to_dev()
         self.optional_cleanup(inventory, selection)
@@ -1930,23 +2350,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("[supagit] Checking for updates… / Comprobando actualizaciones…")
         try:
             if not needs_skip_update():
-                source = supagit_update.source_root_from_marker()
-                if source is None:
-                    candidate = _SCRIPT_DIR.parent
-                    if (candidate / "scripts" / "install-supagit-global.sh").is_file():
-                        source = candidate
-                if source is None:
-                    raise ShipError(
-                        "Cannot locate the registered supagit source-root clone. "
-                        "Re-run scripts/install-supagit-global.sh from a clone of "
-                        "https://github.com/emiliosevilla/supagit.git"
-                    )
+                update_lang = supagit_update.resolve_update_lang(raw_argv)
+                source = supagit_update.ensure_healthy_source_root(
+                    lang=update_lang, progress=sys.stderr
+                )
+                repaired = bool(
+                    getattr(supagit_update.ensure_healthy_source_root, "repaired", False)
+                )
                 if supagit_update.needs_update(source):
                     print("[supagit] Update available; pulling and reinstalling… / Hay actualización…")
-                    update_lang = supagit_update.resolve_update_lang(raw_argv)
                     supagit_update.pull_and_reinstall(
                         source, lang=update_lang, progress=sys.stderr
                     )
+                    repaired = True
+                if repaired:
                     print("[supagit] Update installed; restarting… / Actualización instalada; reiniciando…")
                     env = os.environ.copy()
                     env[supagit_update.SKIP_ENV] = "1"

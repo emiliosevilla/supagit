@@ -35,6 +35,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "integrate_prompt": (
             "Which features? Enter = pending [✓], or numbers / 0 to skip: "
         ),
+        "confirm_merge_single": "Merge feature {branch} into {base}?",
         "confirm_plan": "Run these steps?",
         "explain_backend": (
             "Supagit needs a project configuration file. "
@@ -54,6 +55,23 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "explain_migrate": (
             "This applies pending database schema changes to {label} (project {ref})."
+        ),
+        "error_migrate_no_target": (
+            "No database migration target configured for branch {branch}; "
+            "aborting before any code merge."
+        ),
+        "error_database_checkpoint": (
+            "Database checkpoint for {label} failed; aborting before any code merge. "
+            "Detail: {detail}"
+        ),
+        "error_database_checkpoint_stale": (
+            "The post-migration check does not confirm that {label} is up to date; "
+            "aborting before any code merge."
+        ),
+        "error_migration_state_mismatch": (
+            "Remote migrations for {label} do not match local supabase/migrations; "
+            "aborting before any code merge. Local-only: {local_only}. "
+            "Remote-only: {remote_only}."
         ),
         "explain_promote": (
             "This merges {source} into {target} on the remote and publishes {target}."
@@ -91,11 +109,34 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "error_gh_refresh_failed": (
             "Tried to refresh the expired GitHub token with `gh auth refresh -h github.com`, "
-            "but it failed: {detail}"
+            "but it failed: {detail}. No interactive terminal is available to complete "
+            "`gh auth login`, so supagit cannot recover automatically."
+        ),
+        "error_gh_login_failed": (
+            "Tried to refresh the GitHub token (`gh auth refresh`) and then launch "
+            "`gh auth login -h github.com`, but login failed: {detail} "
+            "(refresh error was: {refresh_detail})."
         ),
         "error_gh_still_unauthenticated": (
-            "GitHub CLI is still not authenticated after refresh: {detail}. "
-            "Run `gh auth login` once, then re-run supagit."
+            "GitHub CLI is still not authenticated after refresh/login recovery: {detail}."
+        ),
+        "error_supabase_missing": (
+            "Supabase CLI is not installed or not on PATH. Install it: {command}"
+        ),
+        "error_supabase_not_authenticated": (
+            "Supabase CLI is not ready and the failure does not look like a missing login: {detail}"
+        ),
+        "error_supabase_login_unavailable": (
+            "Supabase CLI auth probe (`supabase projects list`) failed: {detail}. "
+            "No interactive terminal is available to complete `supabase login`, "
+            "so supagit cannot recover automatically."
+        ),
+        "error_supabase_login_failed": (
+            "Tried `supabase login` after an auth probe failure, but login failed: {detail} "
+            "(probe error was: {probe_detail})."
+        ),
+        "error_supabase_still_unauthenticated": (
+            "Supabase CLI is still not authenticated after login recovery: {detail}."
         ),
         "explain_cleanup": (
             "Optional step: remove worktrees and branches that were already merged "
@@ -107,6 +148,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "explain_integrate": (
             "Merge feature branches into {base} with a pull request.\n"
             "[✓] = selected if you press Enter. Already-in-{base} stays [✓] but is skipped."
+        ),
+        "explain_integrate_single": (
+            "Only one pending feature to merge into {base} with a pull request: {branch}."
         ),
         "explain_pipeline_order": (
             "Promotion path for this run (numbers from the pipeline list above)."
@@ -145,6 +189,10 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Committed local changes on {branch}, but it is still behind "
             "{remote}/{branch} (or has diverged). Skipping push; sync comes next."
         ),
+        "publish_rebase_behind": (
+            "Committed local changes on {branch}; rebasing onto "
+            "{remote}/{branch} before publishing."
+        ),
         "error_contained_integrate": (
             "Branch {branch} is already included in {base}; it needs no new pull request. "
             "Omit it, press Enter for defaults, or type 0/none to skip all work branches."
@@ -152,6 +200,10 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "error_nothing_to_integrate": (
             "Branch {branch} is already contained in {base}; nothing to integrate."
         ),
+        "note_nothing_to_merge": (
+            "Nothing to merge: {branch} is already contained in {base}."
+        ),
+        "already merged": "already merged",
         "error_empty_pr": (
             "No commits to put in a pull request from {head} into {base} "
             "({base_ref}..{head} is empty). Omit this branch or add commits first."
@@ -163,13 +215,37 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "committing on {pipeline} first causes merge conflicts."
         ),
         "error_rebase_conflict": (
-            "Rebase of {branch} onto {base_ref} stopped with conflicts. "
-            "Resolve on {branch}, push, then re-run supagit."
+            "Rebase of {branch} onto {base_ref} could not finish after conflict "
+            "resolution. Re-run supagit to try again."
+        ),
+        "explain_rebase_conflict": (
+            "Rebase of {branch} onto {base_ref} stopped with conflicts in:\n"
+            "{files}\n"
+            "I will open your editor on those files. Resolve the conflict markers, "
+            "save, then confirm so I can stage them and continue the rebase."
+        ),
+        "confirm_rebase_continue": "Conflicts resolved? Continue the rebase?",
+        "error_rebase_conflict_cancelled": (
+            "Conflict resolution for the rebase of {branch} onto {base_ref} was "
+            "cancelled. I aborted the rebase so the checkout is clean — re-run when ready."
+        ),
+        "error_rebase_conflict_needs_interactive": (
+            "Rebase of {branch} onto {base_ref} hit conflicts that need an "
+            "interactive editor. Re-run supagit in a terminal without --yes."
         ),
         "error_pr_merge_conflict": (
-            "Pull request #{number} ({head} into {base}) has merge conflicts. "
-            "Rebase {head} onto {base}, resolve conflicts, push, then re-run — "
-            "or close the PR and reconcile locally."
+            "Pull request #{number} ({head} into {base}) still has merge conflicts "
+            "after guided rebase recovery. Re-run supagit interactively to resolve "
+            "them, or close the PR and reconcile the branches first."
+        ),
+        "note_pr_auto_merge_armed": (
+            "Pull request #{number}: auto-merge is armed but the merge has not "
+            "completed yet. Trying administrator merge as a hard override."
+        ),
+        "error_pr_auto_merge_not_completed": (
+            "Pull request #{number}: auto-merge was armed but the pull request "
+            "never reached MERGED, and the administrator merge override also failed. "
+            "supagit will not continue as if the merge landed."
         ),
         "error_integrate_number": (
             "Invalid independent-work number: {token}. Use the numbers shown next to "
@@ -195,6 +271,20 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "update_found": "[supagit] Update available; pulling and reinstalling…",
         "update_done_reexec": "[supagit] Update installed; restarting…",
         "update_failed": "Could not update supagit from GitHub: {detail}",
+        "update_healing_source": (
+            "[supagit] Source clone missing or unhealthy; refreshing into {path}…"
+        ),
+        "update_healing_reinstall": (
+            "[supagit] Reinstalling global skill from the refreshed source (--lang {lang})…"
+        ),
+        "update_reinstalled": "[supagit] Reinstalled. [build: {build}]",
+        "update_clone_failed": (
+            "Could not clone https://github.com/emiliosevilla/supagit into the "
+            "managed source directory: {detail}"
+        ),
+        "update_installer_missing": (
+            "Managed source clone is missing the installer script: {path}"
+        ),
         "error_self_update_diverged": (
             "The registered supagit source clone at {path} has diverged from "
             "{remote}/{branch}. Do not auto-update; reconcile manually, for example:\n"
@@ -235,6 +325,35 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "confirm_reposition": "Move the checkout from {current} to {target}?",
         "detached_label": "detached HEAD at {sha}",
+        "rescued_detached_head": (
+            "HEAD was detached at {sha}; I rescued it as branch {branch}."
+        ),
+        "sequencer_kind_merge": "merge",
+        "sequencer_kind_rebase": "rebase",
+        "sequencer_kind_cherry-pick": "cherry-pick",
+        "explain_sequencer_in_progress": (
+            "This repository has an unfinished {kind}. "
+            "I should abort it before changing anything else, so we start from a clean checkout."
+        ),
+        "confirm_sequencer_abort": "Abort the unfinished {kind} now?",
+        "sequencer_aborted": "Aborted the unfinished {kind}.",
+        "sequencer_left_in_progress": (
+            "Left the unfinished {kind} as-is. Finish or abort it, then re-run supagit."
+        ),
+        "explain_secrets_gitignore": (
+            "I found potential secrets in the working tree and will leave them unstaged: "
+            "{paths}. I can add these ignore patterns so they stay out of future commits: "
+            "{patterns}."
+        ),
+        "confirm_secrets_gitignore": "Add those patterns to .gitignore now?",
+        "secrets_gitignore_updated": "Updated .gitignore to ignore detected secrets.",
+        "error_only_secrets": (
+            "Only potential secrets are left to commit ({paths}). "
+            "Nothing safe remains to stage — remove or ignore them, then re-run."
+        ),
+        "error_only_secrets_remaining": (
+            "Only potential secrets were left after exclusions; nothing safe to commit."
+        ),
         "error_dirty_reposition": (
             "I cannot move the checkout to {target}: {current} has uncommitted changes:\n"
             "{files}\n"
@@ -349,7 +468,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "• {role}: behind upstream — a fast-forward sync will run."
         ),
         "situation_finding_publish_then_ff": (
-            "• {role}: dirty and behind upstream — publish first, then fast-forward."
+            "• {role}: dirty and behind upstream — commit, rebase onto upstream, then publish."
         ),
         "situation_finding_publish_only": (
             "• {role}: dirty — publish local changes first."
@@ -400,6 +519,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "integrate_prompt": (
             "¿Qué features? Enter = pendientes [✓], o números / 0 para omitir: "
         ),
+        "confirm_merge_single": "¿Fusionar feature {branch} en {base}?",
         "confirm_plan": "¿Ejecuto estos pasos?",
         "explain_backend": (
             "Supagit necesita un fichero de configuración del proyecto. "
@@ -419,6 +539,23 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "explain_migrate": (
             "Esto aplicará cambios de esquema pendientes a {label} (proyecto {ref})."
+        ),
+        "error_migrate_no_target": (
+            "No hay destino de migración de base de datos configurado para la rama "
+            "{branch}; se aborta antes de fusionar código."
+        ),
+        "error_database_checkpoint": (
+            "El checkpoint de base de datos para {label} falló; se aborta antes de "
+            "fusionar código. Detalle: {detail}"
+        ),
+        "error_database_checkpoint_stale": (
+            "La comprobación posterior a la migración no confirma que {label} esté "
+            "al día; se aborta antes de fusionar código."
+        ),
+        "error_migration_state_mismatch": (
+            "Las migraciones remotas de {label} no coinciden con supabase/migrations "
+            "local; se aborta antes de fusionar código. Solo local: {local_only}. "
+            "Solo remoto: {remote_only}."
         ),
         "explain_promote": (
             "Esto fusionará {source} en {target} en el remoto y publicará {target}."
@@ -457,11 +594,34 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "error_gh_refresh_failed": (
             "Intenté refrescar el token de GitHub con `gh auth refresh -h github.com`, "
-            "pero falló: {detail}"
+            "pero falló: {detail}. No hay terminal interactiva para completar "
+            "`gh auth login`, así que supagit no puede recuperarse automáticamente."
+        ),
+        "error_gh_login_failed": (
+            "Intenté refrescar el token de GitHub (`gh auth refresh`) y luego lanzar "
+            "`gh auth login -h github.com`, pero el login falló: {detail} "
+            "(el error de refresh fue: {refresh_detail})."
         ),
         "error_gh_still_unauthenticated": (
-            "GitHub CLI sigue sin autenticar tras el refresh: {detail}. "
-            "Ejecuta `gh auth login` una vez y vuelve a lanzar supagit."
+            "GitHub CLI sigue sin autenticar tras el intento de refresh/login: {detail}."
+        ),
+        "error_supabase_missing": (
+            "La CLI de Supabase no está instalada o no está en PATH. Instálala: {command}"
+        ),
+        "error_supabase_not_authenticated": (
+            "La CLI de Supabase no está lista y el fallo no parece un login ausente: {detail}"
+        ),
+        "error_supabase_login_unavailable": (
+            "La sonda de auth de Supabase (`supabase projects list`) falló: {detail}. "
+            "No hay terminal interactiva para completar `supabase login`, "
+            "así que supagit no puede recuperarse automáticamente."
+        ),
+        "error_supabase_login_failed": (
+            "Intenté `supabase login` tras un fallo de la sonda de auth, pero el login falló: {detail} "
+            "(el error de la sonda fue: {probe_detail})."
+        ),
+        "error_supabase_still_unauthenticated": (
+            "La CLI de Supabase sigue sin autenticar tras el intento de login: {detail}."
         ),
         "explain_cleanup": (
             "Paso opcional: eliminar worktrees y ramas ya fusionadas que se pueden borrar con seguridad."
@@ -472,6 +632,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "explain_integrate": (
             "Fusionar features en {base} con un pull request.\n"
             "[✓] = seleccionadas si pulsas Enter. Las ya en {base} quedan [✓] pero se omiten."
+        ),
+        "explain_integrate_single": (
+            "Solo hay una feature pendiente para fusionar en {base} con un pull request: {branch}."
         ),
         "explain_pipeline_order": (
             "Camino de promoción de esta ejecución (números de la lista de pipeline arriba)."
@@ -510,6 +673,10 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Se confirmaron cambios locales en {branch}, pero sigue por detrás de "
             "{remote}/{branch} (o ha divergido). Se omite el push; la sincronización viene después."
         ),
+        "publish_rebase_behind": (
+            "Se confirmaron cambios locales en {branch}; haciendo rebase sobre "
+            "{remote}/{branch} antes de publicar."
+        ),
         "error_contained_integrate": (
             "La rama {branch} ya está incluida en {base}; no necesita una pull request nueva. "
             "Omítela, pulsa Enter para los valores por defecto, o escribe 0/ninguno para "
@@ -518,6 +685,10 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "error_nothing_to_integrate": (
             "La rama {branch} ya está contenida en {base}; no hay nada que integrar."
         ),
+        "note_nothing_to_merge": (
+            "Nada que fusionar: {branch} ya está contenida en {base}."
+        ),
+        "already merged": "ya fusionada",
         "error_empty_pr": (
             "No hay commits para una pull request de {head} hacia {base} "
             "({base_ref}..{head} está vacío). Omite esa rama o añade commits primero."
@@ -529,13 +700,39 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "en {pipeline} antes provoca conflictos de merge."
         ),
         "error_rebase_conflict": (
-            "El rebase de {branch} sobre {base_ref} se detuvo por conflictos. "
-            "Resuélvelos en {branch}, haz push y vuelve a ejecutar supagit."
+            "El rebase de {branch} sobre {base_ref} no pudo terminarse tras "
+            "resolver conflictos. Vuelve a ejecutar supagit para reintentar."
+        ),
+        "explain_rebase_conflict": (
+            "El rebase de {branch} sobre {base_ref} se detuvo por conflictos en:\n"
+            "{files}\n"
+            "Abriré tu editor con esos ficheros. Resuelve los marcadores de "
+            "conflicto, guarda y confirma para que los prepare y continúe el rebase."
+        ),
+        "confirm_rebase_continue": "¿Conflictos resueltos? ¿Continuar el rebase?",
+        "error_rebase_conflict_cancelled": (
+            "Se canceló la resolución de conflictos del rebase de {branch} sobre "
+            "{base_ref}. Aborté el rebase para dejar el checkout limpio — vuelve a "
+            "ejecutar cuando quieras."
+        ),
+        "error_rebase_conflict_needs_interactive": (
+            "El rebase de {branch} sobre {base_ref} tiene conflictos que necesitan "
+            "un editor interactivo. Vuelve a ejecutar supagit en una terminal sin --yes."
         ),
         "error_pr_merge_conflict": (
-            "La pull request #{number} ({head} hacia {base}) tiene conflictos de merge. "
-            "Haz rebase de {head} sobre {base}, resuelve conflictos, push y vuelve a "
-            "ejecutar — o cierra la PR y reconcilia en local."
+            "La pull request #{number} ({head} hacia {base}) sigue con conflictos "
+            "de merge tras la recuperación con rebase guiado. Vuelve a ejecutar "
+            "supagit de forma interactiva para resolverlos, o cierra la PR y "
+            "reconcilia las ramas antes."
+        ),
+        "note_pr_auto_merge_armed": (
+            "Pull request #{number}: auto-merge está armado pero la fusión aún no "
+            "ha terminado. Probando fusión de administrador como anulación dura."
+        ),
+        "error_pr_auto_merge_not_completed": (
+            "Pull request #{number}: auto-merge quedó armado pero la pull request "
+            "nunca llegó a MERGED, y la anulación con fusión de administrador también "
+            "falló. supagit no continuará como si el merge hubiera aterrizado."
         ),
         "error_integrate_number": (
             "Número de trabajo independiente no válido: {token}. Usa los números junto a "
@@ -562,6 +759,20 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "update_found": "[supagit] Hay actualización; descargando y reinstalando…",
         "update_done_reexec": "[supagit] Actualización instalada; reiniciando…",
         "update_failed": "No se pudo actualizar supagit desde GitHub: {detail}",
+        "update_healing_source": (
+            "[supagit] Clon fuente ausente o dañado; refrescando en {path}…"
+        ),
+        "update_healing_reinstall": (
+            "[supagit] Reinstalando la skill global desde la fuente refrescada (--lang {lang})…"
+        ),
+        "update_reinstalled": "[supagit] Reinstalado. [build: {build}]",
+        "update_clone_failed": (
+            "No se pudo clonar https://github.com/emiliosevilla/supagit en el "
+            "directorio de fuente gestionado: {detail}"
+        ),
+        "update_installer_missing": (
+            "Al clon de fuente gestionado le falta el script instalador: {path}"
+        ),
         "error_self_update_diverged": (
             "El clon source-root de supagit en {path} ha divergido de "
             "{remote}/{branch}. No se actualiza automáticamente; reconcílialo a mano, "
@@ -603,6 +814,35 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "confirm_reposition": "¿Mover el checkout de {current} a {target}?",
         "detached_label": "HEAD desacoplado en {sha}",
+        "rescued_detached_head": (
+            "HEAD estaba desacoplado en {sha}; lo he rescatado como rama {branch}."
+        ),
+        "sequencer_kind_merge": "fusión (merge)",
+        "sequencer_kind_rebase": "rebase",
+        "sequencer_kind_cherry-pick": "cherry-pick",
+        "explain_sequencer_in_progress": (
+            "Este repositorio tiene un {kind} a medias. "
+            "Debo abortarlo antes de cambiar nada más, para partir de un checkout limpio."
+        ),
+        "confirm_sequencer_abort": "¿Aborto el {kind} a medias ahora?",
+        "sequencer_aborted": "He abortado el {kind} a medias.",
+        "sequencer_left_in_progress": (
+            "He dejado el {kind} a medias como estaba. Termínalo o abortalo y vuelve a ejecutar supagit."
+        ),
+        "explain_secrets_gitignore": (
+            "He encontrado posibles secretos en el árbol de trabajo y los dejaré sin stage: "
+            "{paths}. Puedo añadir estos patrones a .gitignore para que no entren en commits futuros: "
+            "{patterns}."
+        ),
+        "confirm_secrets_gitignore": "¿Añado esos patrones a .gitignore ahora?",
+        "secrets_gitignore_updated": "He actualizado .gitignore para ignorar los secretos detectados.",
+        "error_only_secrets": (
+            "Solo quedan posibles secretos por commitear ({paths}). "
+            "No hay nada seguro que añadir — quítalos o ignóralos y vuelve a ejecutar."
+        ),
+        "error_only_secrets_remaining": (
+            "Tras excluir secretos no queda nada seguro que commitear."
+        ),
         "error_dirty_reposition": (
             "No puedo mover el checkout a {target}: {current} tiene cambios sin guardar:\n"
             "{files}\n"
@@ -720,7 +960,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "• {role}: por detrás del upstream — se hará un fast-forward."
         ),
         "situation_finding_publish_then_ff": (
-            "• {role}: sucia y por detrás del upstream — publicar primero y luego fast-forward."
+            "• {role}: sucia y por detrás del upstream — commit, rebase sobre el upstream y publicar."
         ),
         "situation_finding_publish_only": (
             "• {role}: sucia — publicar primero los cambios locales."

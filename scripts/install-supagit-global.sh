@@ -148,12 +148,53 @@ msg() {
     es:path_export_or_new)
       printf '%s\n' "Ejecuta esto ahora, o abre una Terminal nueva:"
       ;;
+    en:bad_source_title)
+      printf '%s\n' "ERROR: this checkout is not the official emiliosevilla/supagit clone."
+      ;;
+    es:bad_source_title)
+      printf '%s\n' "ERROR: este checkout no es el clon oficial emiliosevilla/supagit."
+      ;;
+    en:bad_source_hint)
+      printf '%s\n' "Install with the curl one-liner from the repo README instead:"
+      ;;
+    es:bad_source_hint)
+      printf '%s\n' "Instala con el one-liner curl del README del repositorio:"
+      ;;
+    en:bad_source_curl)
+      printf '%s\n' "  curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh"
+      ;;
+    es:bad_source_curl)
+      printf '%s\n' "  curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh"
+      ;;
     *)
       printf '%s\n' "ERROR: missing installer message: $key" >&2
       exit 1
       ;;
   esac
 }
+
+abort_bad_source() {
+  msg bad_source_title >&2
+  msg bad_source_hint >&2
+  msg bad_source_curl >&2
+  exit 1
+}
+
+# Refuse to register a global source-root that is not the real GitHub clone.
+if [ ! -f "$repo_root/scripts/supagit.py" ]; then
+  abort_bad_source
+fi
+if ! command -v git >/dev/null 2>&1; then
+  abort_bad_source
+fi
+origin_url=$(git -C "$repo_root" remote get-url origin 2>/dev/null || true)
+origin_norm=$(printf '%s' "$origin_url" | tr '[:upper:]' '[:lower:]' | tr ':' '/')
+case "$origin_norm" in
+  *github.com/emiliosevilla/supagit*) ;;
+  *)
+    abort_bad_source
+    ;;
+esac
 
 mkdir -p "$global_skill_dir" "$global_bin_dir" "$global_claude_commands"
 
@@ -172,113 +213,18 @@ install -m 644 "$repo_root/scripts/supagit_i18n.py" "$global_skill_dir/supagit_i
 install -m 644 "$repo_root/scripts/supagit_update.py" "$global_skill_dir/supagit_update.py"
 install -m 644 "$repo_root/scripts/supagit_busy.py" "$global_skill_dir/supagit_busy.py"
 install -m 644 "$repo_root/scripts/supagit_situation.py" "$global_skill_dir/supagit_situation.py"
+install -m 644 "$repo_root/scripts/supagit_supabase.py" "$global_skill_dir/supagit_supabase.py"
 install -m 755 "$repo_root/scripts/supagit" "$global_skill_dir/supagit"
 install -m 644 "$repo_root/docs/supagit-agent-command.md" "$global_skill_dir/SKILL.md"
 printf '%s\n' "$repo_root" > "$source_marker"
 
+# Update decisions live entirely in Python (maybe_self_update_and_reexec /
+# ensure_healthy_source_root → pull_and_reinstall). The wrapper must not cmp
+# or reinstall — that stale-source dance can overwrite a fresher skill.
 cat > "$global_bin_dir/supagit" <<'EOF'
 #!/bin/sh
 set -eu
-
-global_skill_dir="${HOME}/.agents/skills/supagit"
-global_source_root=""
-source_marker_needs_install=true
-colour_enabled=true
-for arg in "$@"; do
-  case "$arg" in
-    --no-color|--color=never)
-      colour_enabled=false
-      ;;
-  esac
-done
-if [ "${NO_COLOR+x}" = x ] || [ "${TERM:-}" = dumb ]; then
-  colour_enabled=false
-fi
-
-colour_line() {
-  colour=$1
-  shift
-  if [ "$colour_enabled" = true ]; then
-    printf '\033[%sm%s\033[0m\n' "$colour" "$*"
-  else
-    printf '%s\n' "$*"
-  fi
-}
-
-if [ -f "$global_skill_dir/source-root" ]; then
-  global_source_root=$(sed -n '1p' "$global_skill_dir/source-root")
-  if [ -n "$global_source_root" ] \
-    && { [ ! -x "$global_source_root/scripts/install-supagit-global.sh" ] \
-      || [ ! -f "$global_source_root/scripts/supagit.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit_layout.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit_inventory.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit_menu.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit_sweep.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit_i18n.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit_update.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit_busy.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit_situation.py" ] \
-      || [ ! -f "$global_source_root/scripts/supagit" ] \
-      || [ ! -f "$global_source_root/docs/supagit-agent-command.md" ]; }; then
-    global_source_root=""
-  else
-    source_marker_needs_install=false
-  fi
-fi
-if [ -z "$global_source_root" ] \
-  && [ -f "scripts/install-supagit-global.sh" ] \
-  && [ -f "scripts/supagit.py" ]; then
-  global_source_root=$(CDPATH= cd -- "$(dirname -- "scripts/install-supagit-global.sh")/.." && pwd)
-fi
-
-if [ -n "$global_source_root" ] \
-  && [ -x "$global_source_root/scripts/install-supagit-global.sh" ] \
-  && [ -f "$global_source_root/scripts/supagit.py" ] \
-  && [ -f "$global_source_root/scripts/supagit_layout.py" ] \
-  && [ -f "$global_source_root/scripts/supagit_inventory.py" ] \
-  && [ -f "$global_source_root/scripts/supagit_menu.py" ] \
-  && [ -f "$global_source_root/scripts/supagit_sweep.py" ] \
-  && [ -f "$global_source_root/scripts/supagit_i18n.py" ] \
-  && [ -f "$global_source_root/scripts/supagit_update.py" ] \
-  && [ -f "$global_source_root/scripts/supagit_busy.py" ] \
-  && [ -f "$global_source_root/scripts/supagit_situation.py" ] \
-  && [ -f "$global_source_root/scripts/supagit" ] \
-  && [ -f "$global_source_root/docs/supagit-agent-command.md" ]; then
-  needs_install=$source_marker_needs_install
-  if ! cmp -s "$global_source_root/scripts/supagit.py" "$global_skill_dir/supagit.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit_layout.py" "$global_skill_dir/supagit_layout.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit_inventory.py" "$global_skill_dir/supagit_inventory.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit_menu.py" "$global_skill_dir/supagit_menu.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit_sweep.py" "$global_skill_dir/supagit_sweep.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit_i18n.py" "$global_skill_dir/supagit_i18n.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit_update.py" "$global_skill_dir/supagit_update.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit_busy.py" "$global_skill_dir/supagit_busy.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit_situation.py" "$global_skill_dir/supagit_situation.py" \
-    || ! cmp -s "$global_source_root/scripts/supagit" "$global_skill_dir/supagit" \
-    || ! cmp -s "$global_source_root/docs/supagit-agent-command.md" "$global_skill_dir/SKILL.md"; then
-    needs_install=true
-  fi
-  if [ "$needs_install" = true ]; then
-    colour_line 32 '[supagit] Updating the global skill from the registered source.'
-    # Pass language so the installer does not prompt mid auto-update.
-    install_lang="${SUPAGIT_LANG:-en}"
-    case "$install_lang" in
-      en|es|EN|ES) ;;
-      *) install_lang=en ;;
-    esac
-    if ! "$global_source_root/scripts/install-supagit-global.sh" --lang "$install_lang"; then
-      colour_line 31 '[supagit] ERROR: automatic global-skill update failed.' >&2
-      exit 1
-    fi
-  fi
-fi
-
-if [ ! -f "$global_skill_dir/supagit.py" ]; then
-  colour_line 31 '[supagit] ERROR: global skill is not installed and no source was found.' >&2
-  exit 1
-fi
-
-exec python3 "$global_skill_dir/supagit.py" "$@"
+exec python3 "${HOME}/.agents/skills/supagit/supagit.py" "$@"
 EOF
 chmod 755 "$global_bin_dir/supagit"
 install -m 644 "$repo_root/docs/supagit-agent-command.md" "$global_claude_commands/supagit.md"

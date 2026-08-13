@@ -169,6 +169,58 @@ branch refs/heads/feature/x
             self.assertIn("feature/x", names)
             self.assertFalse(names["feature/x"].contained_in_first)
 
+    def test_stale_upstream_after_remote_delete_not_used(self) -> None:
+        """Deleted remote branch must not leave a phantom origin/* sync target."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _run(root, "git", "init", "-b", "dev")
+            _run(root, "git", "config", "user.email", "t@example.com")
+            _run(root, "git", "config", "user.name", "t")
+            (root / "a").write_text("1\n", encoding="utf-8")
+            _run(root, "git", "add", "a")
+            _run(root, "git", "commit", "-m", "init")
+            _run(root, "git", "checkout", "-b", "work")
+            (root / "a").write_text("work\n", encoding="utf-8")
+            _run(root, "git", "add", "a")
+            _run(root, "git", "commit", "-m", "work")
+            _run(root, "git", "checkout", "dev")
+            # Fake remote + upstream config as after push -u, then prune deleted work.
+            _run(root, "git", "remote", "add", "origin", "https://example.com/repo.git")
+            _run(root, "git", "update-ref", "refs/remotes/origin/dev", "dev")
+            _run(root, "git", "update-ref", "refs/remotes/origin/work", "work")
+            _run(root, "git", "branch", "--set-upstream-to=origin/dev", "dev")
+            _run(root, "git", "branch", "--set-upstream-to=origin/work", "work")
+            # Post-prune: configured upstream remains, remote-tracking ref is gone.
+            _run(root, "git", "update-ref", "-d", "refs/remotes/origin/work")
+            self.assertEqual(
+                _run(root, "git", "config", "--get", "branch.work.merge"),
+                "refs/heads/work",
+            )
+            with self.assertRaises(subprocess.CalledProcessError):
+                _run(root, "git", "rev-parse", "--verify", "refs/remotes/origin/work")
+
+            layout = supagit_layout.resolve_repo_layout(root)
+
+            def run_git(*args: str, cwd: Path | None = None, capture: bool = True) -> str:
+                completed = subprocess.run(
+                    ["git", *args],
+                    cwd=str(cwd or root),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                return completed.stdout if capture else ""
+
+            inv = supagit_inventory.build_inventory(
+                layout, ("dev",), "origin", git_runner=run_git
+            )
+            work = next(b for b in inv.branches if b.name == "work")
+            self.assertNotEqual(work.upstream, "origin/work")
+            self.assertIsNone(work.upstream)
+            self.assertEqual(work.ahead, 0)
+            self.assertEqual(work.behind, 0)
+
 
 def _fake_inventory() -> RepoInventory:
     layout = RepoLayout(
@@ -479,6 +531,40 @@ class MenuTests(unittest.TestCase):
         self.assertIn("feature/x", text)
         self.assertIn("dev", text)
 
+    def test_render_execution_plan_surfaces_migrate_items(self) -> None:
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+        selection = supagit_menu.MenuSelection(
+            integrate=("feature/x",), pipeline=("dev", "pre", "prod")
+        )
+        text = supagit_menu.render_execution_plan(
+            selection,
+            first_branch="dev",
+            remote="origin",
+            migrate_targets={
+                "dev": "dev-ref",
+                "pre": "pre-ref",
+                "prod": "prod-ref",
+            },
+        )
+        migrate_dev = supagit_i18n.t(
+            "plan_migrate_item", label="dev", ref="dev-ref"
+        )
+        migrate_pre = supagit_i18n.t(
+            "plan_migrate_item", label="pre", ref="pre-ref"
+        )
+        migrate_prod = supagit_i18n.t(
+            "plan_migrate_item", label="prod", ref="prod-ref"
+        )
+        self.assertIn(migrate_dev, text)
+        self.assertIn(migrate_pre, text)
+        self.assertIn(migrate_prod, text)
+        self.assertLess(text.index(migrate_dev), text.index("Publish dev"))
+        self.assertLess(text.index("Integrate feature/x"), text.index(migrate_pre))
+        self.assertLess(text.index(migrate_pre), text.index("Merge dev into pre"))
+        self.assertLess(text.index(migrate_prod), text.index("Merge pre into prod"))
+
     def test_render_execution_plan_weaves_ff_after_integrate_before_promote(self) -> None:
         import supagit_i18n
         import supagit_situation as sit
@@ -562,6 +648,85 @@ class GhClientTests(unittest.TestCase):
         self.assertEqual(calls[1], ["gh", "auth", "refresh", "-h", "github.com"])
         self.assertEqual(calls[2], ["gh", "auth", "status"])
 
+    def test_ensure_ready_login_fallback_on_refresh_failure_tty(self) -> None:
+        """Refresh fails on TTY → launch gh auth login once, then re-verify."""
+        calls: list[list[str]] = []
+        attempts = {"status": 0}
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:3] == ["gh", "auth", "status"]:
+                attempts["status"] += 1
+                if attempts["status"] == 1:
+                    raise RuntimeError("token in keyring is invalid")
+                return ""
+            if cmd[:3] == ["gh", "auth", "refresh"]:
+                raise RuntimeError("refresh denied")
+            if cmd[:3] == ["gh", "auth", "login"]:
+                return ""
+            raise AssertionError(cmd)
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with patch.object(sys.stdin, "isatty", return_value=True):
+            client.ensure_ready()
+        self.assertEqual(calls[0], ["gh", "auth", "status"])
+        self.assertEqual(calls[1], ["gh", "auth", "refresh", "-h", "github.com"])
+        self.assertEqual(calls[2], ["gh", "auth", "login", "-h", "github.com"])
+        self.assertEqual(calls[3], ["gh", "auth", "status"])
+        self.assertEqual(attempts["status"], 2)
+
+    def test_ensure_ready_refresh_failure_non_tty_fails_closed(self) -> None:
+        """No TTY → do not hang on login; fail closed without 'run login yourself'."""
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:3] == ["gh", "auth", "status"]:
+                raise RuntimeError("token in keyring is invalid")
+            if cmd[:3] == ["gh", "auth", "refresh"]:
+                raise RuntimeError("refresh denied")
+            raise AssertionError(f"unexpected command (no login without TTY): {cmd}")
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with patch.object(sys.stdin, "isatty", return_value=False):
+            with self.assertRaises(supagit_sweep.SweepError) as ctx:
+                client.ensure_ready()
+        message = str(ctx.exception).lower()
+        self.assertIn("refresh", message)
+        self.assertNotIn("run `gh auth login`", message)
+        self.assertNotIn("ejecuta `gh auth login`", message)
+        self.assertEqual(
+            calls,
+            [
+                ["gh", "auth", "status"],
+                ["gh", "auth", "refresh", "-h", "github.com"],
+            ],
+        )
+
+    def test_ensure_ready_login_failure_on_tty_fails_closed(self) -> None:
+        """TTY login attempted once; if it fails, fail closed without manual primary fix."""
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:3] == ["gh", "auth", "status"]:
+                raise RuntimeError("token in keyring is invalid")
+            if cmd[:3] == ["gh", "auth", "refresh"]:
+                raise RuntimeError("refresh denied")
+            if cmd[:3] == ["gh", "auth", "login"]:
+                raise RuntimeError("login cancelled")
+            raise AssertionError(cmd)
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with patch.object(sys.stdin, "isatty", return_value=True):
+            with self.assertRaises(supagit_sweep.SweepError) as ctx:
+                client.ensure_ready()
+        message = str(ctx.exception).lower()
+        self.assertIn("login", message)
+        self.assertNotIn("run `gh auth login`", message)
+        self.assertEqual(calls[2], ["gh", "auth", "login", "-h", "github.com"])
+        self.assertEqual(len(calls), 3)
+
     def test_ensure_ready_fails_when_gh_missing(self) -> None:
         def run_raw(cmd, **kwargs):
             raise FileNotFoundError("gh")
@@ -580,9 +745,11 @@ class GhClientTests(unittest.TestCase):
             client.ensure_ready()
         self.assertIn("network unreachable", str(ctx.exception))
 
-    def test_merge_pr_retries_auth_and_auto(self) -> None:
+    def test_merge_pr_policy_ladder_merge_then_auto_then_admin(self) -> None:
+        """Policy blocks climb merge → --auto → --admin (never admin first)."""
         calls: list[list[str]] = []
         outcomes = [
+            RuntimeError("base branch policy prohibits the merge"),
             RuntimeError("base branch policy prohibits the merge"),
             "",
         ]
@@ -595,14 +762,139 @@ class GhClientTests(unittest.TestCase):
             return ""
 
         client = supagit_sweep.GhClient(run_raw, dry_run=False)
-        client.merge_pr(9, admin=True, delete_branch=False)
+        client.merge_pr(9, delete_branch=False)
+        self.assertEqual(calls[0], ["gh", "pr", "merge", "9", "--merge"])
         self.assertEqual(
-            calls[0], ["gh", "pr", "merge", "9", "--merge", "--admin"]
+            calls[1], ["gh", "pr", "merge", "9", "--merge", "--auto"]
+        )
+        self.assertEqual(
+            calls[2], ["gh", "pr", "merge", "9", "--merge", "--admin"]
+        )
+        self.assertNotIn("--admin", calls[0])
+        self.assertNotIn("--admin", calls[1])
+
+    def test_merge_pr_policy_auto_succeeds_without_admin(self) -> None:
+        calls: list[list[str]] = []
+        outcomes = [
+            RuntimeError("not mergeable by policy"),
+            "",
+        ]
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if list(cmd)[:3] == ["gh", "pr", "view"]:
+                return '{"state":"MERGED"}'
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return ""
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with patch.object(supagit_sweep, "sleep", lambda _s: None):
+            client.merge_pr(11, delete_branch=True)
+        self.assertEqual(
+            calls[0], ["gh", "pr", "merge", "11", "--merge", "--delete-branch"]
         )
         self.assertEqual(
             calls[1],
-            ["gh", "pr", "merge", "9", "--merge", "--auto", "--admin"],
+            ["gh", "pr", "merge", "11", "--merge", "--auto", "--delete-branch"],
         )
+        self.assertTrue(any(c[:3] == ["gh", "pr", "view"] for c in calls))
+        self.assertFalse(any("--admin" in c for c in calls))
+
+    def test_merge_pr_auto_exit_zero_waits_for_merged_before_success(self) -> None:
+        """`--auto` exit 0 only arms auto-merge; success requires MERGED state."""
+        calls: list[list[str]] = []
+        states = ["OPEN", "OPEN", "MERGED"]
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if list(cmd)[:3] == ["gh", "pr", "view"]:
+                return f'{{"state":"{states.pop(0)}"}}'
+            if list(cmd)[:4] == ["gh", "pr", "merge", "15"]:
+                if "--auto" in cmd:
+                    return ""
+                if "--admin" in cmd:
+                    raise AssertionError("must not escalate to admin once MERGED")
+                raise RuntimeError("base branch policy prohibits the merge")
+            raise AssertionError(cmd)
+
+        sleeps: list[float] = []
+
+        def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with patch.object(supagit_sweep, "sleep", fake_sleep):
+            client.merge_pr(15, delete_branch=False)
+
+        self.assertIn(
+            ["gh", "pr", "merge", "15", "--merge", "--auto"], calls
+        )
+        self.assertEqual(sum(1 for c in calls if c[:3] == ["gh", "pr", "view"]), 3)
+        self.assertEqual(len(sleeps), 2)
+        self.assertFalse(any("--admin" in c for c in calls))
+
+    def test_merge_pr_auto_armed_not_merged_escalates_to_admin(self) -> None:
+        """Auto exit 0 without MERGED must not return success; try --admin next."""
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if list(cmd)[:3] == ["gh", "pr", "view"]:
+                return '{"state":"OPEN"}'
+            if list(cmd)[:4] == ["gh", "pr", "merge", "16"]:
+                if "--admin" in cmd:
+                    return ""
+                if "--auto" in cmd:
+                    return ""
+                raise RuntimeError("not mergeable by policy")
+            raise AssertionError(cmd)
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with patch.object(supagit_sweep, "sleep", lambda _s: None):
+            client.merge_pr(16, delete_branch=False)
+
+        self.assertTrue(any("--auto" in c for c in calls))
+        self.assertTrue(any("--admin" in c for c in calls))
+        view_before_admin = True
+        seen_admin = False
+        for c in calls:
+            if "--admin" in c:
+                seen_admin = True
+                break
+            if c[:3] == ["gh", "pr", "view"]:
+                view_before_admin = True
+        self.assertTrue(seen_admin)
+        self.assertTrue(view_before_admin)
+
+    def test_merge_pr_auto_armed_admin_fails_fail_closed(self) -> None:
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+        calls: list[list[str]] = []
+
+        def run_raw(cmd, **kwargs):
+            calls.append(list(cmd))
+            if list(cmd)[:3] == ["gh", "pr", "view"]:
+                return '{"state":"OPEN"}'
+            if list(cmd)[:4] == ["gh", "pr", "merge", "17"]:
+                if "--admin" in cmd:
+                    raise RuntimeError("admin merge blocked")
+                if "--auto" in cmd:
+                    return ""
+                raise RuntimeError("not mergeable by policy")
+            raise AssertionError(cmd)
+
+        client = supagit_sweep.GhClient(run_raw, dry_run=False)
+        with patch.object(supagit_sweep, "sleep", lambda _s: None):
+            with self.assertRaises(supagit_sweep.SweepError) as ctx:
+                client.merge_pr(17, delete_branch=False)
+        detail = str(ctx.exception).lower()
+        self.assertIn("17", detail)
+        self.assertTrue("auto" in detail or "armed" in detail or "pending" in detail)
+        self.assertTrue(any("--auto" in c for c in calls))
+        self.assertTrue(any("--admin" in c for c in calls))
 
     def test_merge_pr_refreshes_token_then_retries(self) -> None:
         calls: list[list[str]] = []
@@ -652,20 +944,6 @@ class GhClientTests(unittest.TestCase):
             ["gh", "pr", "merge", "42", "--merge", "--delete-branch"],
         )
 
-    def test_merge_pr_admin_flag(self) -> None:
-        calls: list[list[str]] = []
-
-        def run_raw(cmd, **kwargs):
-            calls.append(list(cmd))
-            return ""
-
-        client = supagit_sweep.GhClient(run_raw, dry_run=False)
-        client.merge_pr(22, admin=True, delete_branch=True)
-        self.assertEqual(
-            calls[0],
-            ["gh", "pr", "merge", "22", "--merge", "--admin", "--delete-branch"],
-        )
-
     def test_merge_pr_can_keep_head_branch(self) -> None:
         calls: list[list[str]] = []
 
@@ -677,18 +955,7 @@ class GhClientTests(unittest.TestCase):
         client.merge_pr(7, delete_branch=False)
         self.assertEqual(calls[0], ["gh", "pr", "merge", "7", "--merge"])
 
-    def test_merge_pr_admin_without_delete(self) -> None:
-        calls: list[list[str]] = []
-
-        def run_raw(cmd, **kwargs):
-            calls.append(list(cmd))
-            return ""
-
-        client = supagit_sweep.GhClient(run_raw, dry_run=False)
-        client.merge_pr(8, admin=True, delete_branch=False)
-        self.assertEqual(calls[0], ["gh", "pr", "merge", "8", "--merge", "--admin"])
-
-    def test_promote_via_pr_merges_with_admin(self) -> None:
+    def test_promote_via_pr_uses_merge_ladder_not_admin_first(self) -> None:
         merges: list[tuple] = []
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
         pipeline.options = ENGINE.Options(
@@ -726,7 +993,10 @@ class GhClientTests(unittest.TestCase):
             with patch.object(ENGINE.supagit_sweep, "push_branch", return_value=None):
                 pipeline._promote_via_pr("dev", "main", "git@github.com:acme/demo.git")
 
-        self.assertEqual(merges, [(5, {"admin": True, "delete_branch": False})])
+        self.assertEqual(len(merges), 1)
+        self.assertEqual(merges[0][0], 5)
+        self.assertEqual(merges[0][1].get("delete_branch"), False)
+        self.assertNotEqual(merges[0][1].get("admin"), True)
 
     def test_pr_number_from_create_output(self) -> None:
         self.assertEqual(
@@ -839,16 +1109,16 @@ class GhClientTests(unittest.TestCase):
 
 
 class CommitDirtyTreeTests(unittest.TestCase):
-    def test_secret_rejection_short_circuits_before_commit(self) -> None:
-        calls: list[list[str]] = []
+    def test_all_sensitive_paths_abort_before_commit(self) -> None:
+        calls: list[tuple[list[str], Path]] = []
 
-        def reject_sensitive(paths: Sequence[str]) -> None:
-            calls.append(list(paths))
-            raise ValueError("secrets")
+        def reject_sensitive(paths: Sequence[str], cwd: Path) -> Sequence[str]:
+            calls.append((list(paths), cwd))
+            raise ValueError("only secrets")
 
         def run_git(*args, cwd=None, capture=True):
             if args[:2] == ("status", "--porcelain"):
-                return " M .env\n"
+                return " M .env\n?? .env.local\n"
             raise AssertionError(f"should not proceed past secret check: {args}")
 
         with self.assertRaises(ValueError):
@@ -860,7 +1130,57 @@ class CommitDirtyTreeTests(unittest.TestCase):
                 dry_run=False,
             )
         self.assertEqual(len(calls), 1)
-        self.assertIn(".env", calls[0])
+        self.assertEqual(calls[0][1], Path("/wt"))
+        self.assertIn(".env", calls[0][0])
+        self.assertIn(".env.local", calls[0][0])
+
+    def test_mixed_tree_excludes_secrets_and_commits_rest(self) -> None:
+        git_calls: list[tuple] = []
+        guard_calls: list[list[str]] = []
+
+        def reject_sensitive(paths: Sequence[str], cwd: Path) -> Sequence[str]:
+            guard_calls.append(list(paths))
+            self.assertEqual(cwd, Path("/wt"))
+            # Mimic Pipeline guard: drop secrets, keep safe (+ .gitignore).
+            safe = [p for p in paths if not str(p).startswith(".env")]
+            return [*safe, ".gitignore"]
+
+        def run_git(*args, cwd=None, capture=True):
+            git_calls.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return " M app.py\n?? .env.local\n"
+            if args[0] == "add":
+                return ""
+            if args[:3] == ("diff", "--cached", "--name-only"):
+                return "app.py\n.gitignore\n"
+            if args[:3] == ("diff", "--cached", "--check"):
+                return ""
+            if args[0] == "commit":
+                return ""
+            raise AssertionError(f"unexpected git call: {args}")
+
+        created = supagit_sweep.commit_dirty_tree(
+            run_git,
+            cwd=Path("/wt"),
+            message="save work",
+            reject_sensitive=reject_sensitive,
+            dry_run=False,
+        )
+        self.assertTrue(created)
+        self.assertEqual(len(guard_calls), 1)
+        self.assertIn(".env.local", guard_calls[0])
+        self.assertIn("app.py", guard_calls[0])
+
+        add_calls = [c for c in git_calls if c and c[0] == "add"]
+        self.assertEqual(len(add_calls), 1)
+        add_args = add_calls[0]
+        self.assertNotIn("-A", add_args)
+        self.assertIn("app.py", add_args)
+        self.assertIn(".gitignore", add_args)
+        self.assertNotIn(".env.local", add_args)
+
+        commit_calls = [c for c in git_calls if c and c[0] == "commit"]
+        self.assertEqual(len(commit_calls), 1)
 
     def test_clean_tree_returns_false(self) -> None:
         def run_git(*args, cwd=None, capture=True):
@@ -872,10 +1192,58 @@ class CommitDirtyTreeTests(unittest.TestCase):
             run_git,
             cwd=Path("/wt"),
             message="x",
-            reject_sensitive=lambda paths: None,
+            reject_sensitive=lambda paths, cwd: list(paths),
             dry_run=False,
         )
         self.assertFalse(created)
+
+    def test_prestaged_secret_unstaged_before_commit(self) -> None:
+        """Porcelain + pre-staged .env must not land in the commit (novice `git add -A`)."""
+        git_calls: list[tuple] = []
+        cached_reads = {"n": 0}
+
+        def reject_sensitive(paths: Sequence[str], cwd: Path) -> Sequence[str]:
+            return [path for path in paths if path == "app.py"]
+
+        def is_sensitive(path: str) -> bool:
+            return path == ".env" or path.startswith(".env.")
+
+        def run_git(*args, cwd=None, capture=True):
+            git_calls.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return "A  .env\n M app.py\n"
+            if args[0] == "add":
+                self.assertNotIn(".env", args)
+                return ""
+            if args[:3] == ("diff", "--cached", "--name-only"):
+                cached_reads["n"] += 1
+                if cached_reads["n"] == 1:
+                    return ".env\napp.py\n"
+                return "app.py\n"
+            if args[:2] == ("restore", "--staged"):
+                self.assertIn(".env", args)
+                return ""
+            if args[:3] == ("diff", "--cached", "--check"):
+                return ""
+            if args[0] == "commit":
+                return ""
+            raise AssertionError(f"unexpected git call: {args}")
+
+        created = supagit_sweep.commit_dirty_tree(
+            run_git,
+            cwd=Path("/wt"),
+            message="save work",
+            reject_sensitive=reject_sensitive,
+            dry_run=False,
+            is_sensitive=is_sensitive,
+        )
+        self.assertTrue(created)
+        restore_calls = [c for c in git_calls if c[:2] == ("restore", "--staged")]
+        self.assertEqual(len(restore_calls), 1)
+        self.assertIn(".env", restore_calls[0])
+        commit_idx = next(i for i, c in enumerate(git_calls) if c and c[0] == "commit")
+        restore_idx = git_calls.index(restore_calls[0])
+        self.assertLess(restore_idx, commit_idx)
 
 
 class IntegrateBranchTests(unittest.TestCase):
@@ -942,7 +1310,7 @@ class IntegrateBranchTests(unittest.TestCase):
             base="dev",
             cwd=Path("/wt"),
             message_provider=lambda: "should not be called",
-            reject_sensitive=lambda paths: None,
+            reject_sensitive=lambda paths, cwd: list(paths),
             dry_run=False,
             contained_in_first=False,
         )
@@ -1005,7 +1373,7 @@ class IntegrateBranchTests(unittest.TestCase):
             base="dev",
             cwd=Path("/wt"),
             message_provider=lambda: "unused",
-            reject_sensitive=lambda paths: None,
+            reject_sensitive=lambda paths, cwd: list(paths),
             dry_run=False,
             contained_in_first=False,
         )
@@ -1070,7 +1438,7 @@ class IntegrateBranchTests(unittest.TestCase):
             base="main",
             cwd=Path("/repo"),
             message_provider=lambda: "unused",
-            reject_sensitive=lambda paths: None,
+            reject_sensitive=lambda paths, cwd: list(paths),
             dry_run=False,
             contained_in_first=False,
         )
@@ -1140,7 +1508,7 @@ class IntegrateBranchTests(unittest.TestCase):
             base="main",
             cwd=Path("/repo"),
             message_provider=lambda: "unused",
-            reject_sensitive=lambda paths: None,
+            reject_sensitive=lambda paths, cwd: list(paths),
             dry_run=False,
             contained_in_first=False,
         )
@@ -1150,7 +1518,170 @@ class IntegrateBranchTests(unittest.TestCase):
         )
         self.assertIn("merge:12", actions)
 
-    def test_integrate_refuses_conflicting_pr(self) -> None:
+    def test_integrate_polls_unknown_mergeability_before_merge(self) -> None:
+        mergeable_reads: list[str] = []
+        sleeps: list[float] = []
+        states = ["UNKNOWN", "UNKNOWN", "MERGEABLE"]
+
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                return None
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                return None
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                return 31
+
+            def pr_mergeable(self, number: int) -> str:
+                state = states.pop(0)
+                mergeable_reads.append(state)
+                return state
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                raise AssertionError("should not create")
+
+            def merge_pr(self, number: int, **kwargs) -> None:
+                mergeable_reads.append(f"merge:{number}")
+
+        def run_git(*args, cwd=None, capture=True):
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:3] == ("ls-remote", "--heads", "origin"):
+                return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "main\n"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return ""
+            if args[:2] == ("rev-list", "--count"):
+                return "0"
+            if args[0] == "push":
+                return ""
+            if args[0] == "fetch":
+                return ""
+            if args[0] == "rev-parse":
+                return "abc"
+            raise AssertionError(args)
+
+        def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        with patch.object(supagit_sweep, "sleep", fake_sleep, create=True):
+            supagit_sweep.integrate_branch(
+                run_git,
+                gh=FakeGh(),
+                remote="origin",
+                remote_url="git@github.com:acme/demo.git",
+                branch="work",
+                base="main",
+                cwd=Path("/repo"),
+                message_provider=lambda: "unused",
+                reject_sensitive=lambda paths, cwd: list(paths),
+                dry_run=False,
+                contained_in_first=False,
+            )
+
+        self.assertEqual(mergeable_reads[:3], ["UNKNOWN", "UNKNOWN", "MERGEABLE"])
+        self.assertIn("merge:31", mergeable_reads)
+        self.assertEqual(len(sleeps), 2)
+        self.assertLess(sleeps[0], sleeps[1])
+
+    def test_poll_pr_mergeable_stops_early_when_known(self) -> None:
+        reads: list[str] = []
+        sleeps: list[float] = []
+
+        class FakeGh:
+            def pr_mergeable(self, number: int) -> str:
+                reads.append("UNKNOWN" if len(reads) == 0 else "MERGEABLE")
+                return reads[-1]
+
+        result = supagit_sweep.poll_pr_mergeable(
+            FakeGh(),
+            4,
+            sleeper=lambda s: sleeps.append(s),
+        )
+        self.assertEqual(result, "MERGEABLE")
+        self.assertEqual(reads, ["UNKNOWN", "MERGEABLE"])
+        self.assertEqual(len(sleeps), 1)
+
+    def test_integrate_conflicting_rebases_then_merges(self) -> None:
+        actions: list[str] = []
+        merge_states = ["CONFLICTING", "MERGEABLE"]
+
+        class FakeGh:
+            def ensure_ready(self) -> None:
+                return None
+
+            def ensure_github_remote(self, remote_url: str) -> None:
+                return None
+
+            def find_open_pr(self, head: str, base: str) -> int | None:
+                return 21
+
+            def pr_mergeable(self, number: int) -> str:
+                state = merge_states.pop(0)
+                actions.append(f"mergeable:{state}")
+                return state
+
+            def create_pr(self, head: str, base: str, title: str) -> int:
+                raise AssertionError("should not create")
+
+            def merge_pr(self, number: int, **kwargs) -> None:
+                actions.append(f"merge:{number}")
+                actions.append(f"merge_kwargs:{sorted(kwargs.items())}")
+
+        ancestor_checks = {"n": 0}
+
+        def run_git(*args, cwd=None, capture=True):
+            actions.append("git:" + " ".join(args))
+            if args[:2] == ("status", "--porcelain"):
+                return ""
+            if args[:3] == ("ls-remote", "--heads", "origin"):
+                return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "main\n"
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                ancestor_checks["n"] += 1
+                # Pre-PR check: already based. Conflict recovery forces rebase (skips check).
+                return ""
+            if args[:2] == ("rev-list", "--count"):
+                if len(args) > 2 and args[2] == "work..origin/main":
+                    return "1"
+                return "0"
+            if args[0] in ("checkout", "rebase", "push", "fetch"):
+                return ""
+            if args[0] == "rev-parse":
+                return "abc"
+            raise AssertionError(args)
+
+        with patch.object(supagit_sweep, "sleep", lambda _s: None, create=True):
+            supagit_sweep.integrate_branch(
+                run_git,
+                gh=FakeGh(),
+                remote="origin",
+                remote_url="git@github.com:acme/demo.git",
+                branch="work",
+                base="main",
+                cwd=Path("/repo"),
+                message_provider=lambda: "unused",
+                reject_sensitive=lambda paths, cwd: list(paths),
+                dry_run=False,
+                contained_in_first=False,
+            )
+
+        self.assertIn("mergeable:CONFLICTING", actions)
+        self.assertTrue(any(a.startswith("git:rebase") for a in actions))
+        self.assertTrue(any("push --force-with-lease" in a for a in actions))
+        self.assertIn("mergeable:MERGEABLE", actions)
+        self.assertIn("merge:21", actions)
+        self.assertTrue(
+            all(
+                not a.startswith("merge_kwargs:") or "('admin', True)" not in a
+                for a in actions
+            )
+        )
+
+    def test_integrate_refuses_conflicting_pr_after_rebase_retry(self) -> None:
         class FakeGh:
             def ensure_ready(self) -> None:
                 return None
@@ -1178,35 +1709,143 @@ class IntegrateBranchTests(unittest.TestCase):
             if args[:2] == ("branch", "--show-current"):
                 return "main\n"
             if args[:2] == ("merge-base", "--is-ancestor"):
-                return ""
+                raise RuntimeError("not ancestor")
             if args[:2] == ("rev-list", "--count"):
+                if len(args) > 2 and args[2] == "work..origin/main":
+                    return "1"
                 return "0"
-            if args[0] == "push":
-                return ""
-            if args[0] == "fetch":
+            if args[0] in ("checkout", "rebase", "push", "fetch"):
                 return ""
             if args[0] == "rev-parse":
                 return "abc"
             raise AssertionError(args)
 
-        with self.assertRaises(supagit_sweep.SweepError) as ctx:
-            supagit_sweep.integrate_branch(
-                run_git,
-                gh=FakeGh(),
-                remote="origin",
-                remote_url="git@github.com:acme/demo.git",
-                branch="work",
-                base="main",
-                cwd=Path("/repo"),
-                message_provider=lambda: "unused",
-                reject_sensitive=lambda paths: None,
-                dry_run=False,
-                contained_in_first=False,
-            )
+        with patch.object(supagit_sweep, "sleep", lambda _s: None, create=True):
+            with self.assertRaises(supagit_sweep.SweepError) as ctx:
+                supagit_sweep.integrate_branch(
+                    run_git,
+                    gh=FakeGh(),
+                    remote="origin",
+                    remote_url="git@github.com:acme/demo.git",
+                    branch="work",
+                    base="main",
+                    cwd=Path("/repo"),
+                    message_provider=lambda: "unused",
+                    reject_sensitive=lambda paths, cwd: list(paths),
+                    dry_run=False,
+                    contained_in_first=False,
+                )
         self.assertIn("21", str(ctx.exception))
         self.assertIn("conflict", str(ctx.exception).lower())
 
-    def test_integrate_refuses_empty_pr_before_create(self) -> None:
+    def test_rebase_conflict_guides_then_continues_on_confirm(self) -> None:
+        """Conflict keeps rebase state, lists files, opens editor, then continues."""
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+        actions: list[str] = []
+        editor_calls: list[tuple[str, ...]] = []
+        confirms: list[str] = []
+        explains: list[str] = []
+        rebase_attempts = {"n": 0}
+
+        def run_git(*args, cwd=None, capture=True, env=None):
+            actions.append("git:" + " ".join(args))
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                raise RuntimeError("not ancestor")
+            if args[:2] == ("rev-list", "--count"):
+                return "1"
+            if args[:2] == ("branch", "--show-current"):
+                return "main\n"
+            if args[0] == "checkout":
+                return ""
+            if "rebase" in args and "--continue" in args:
+                return ""
+            if "rebase" in args and "--abort" in args:
+                raise AssertionError("must not abort when user confirms")
+            if args[0] == "rebase":
+                rebase_attempts["n"] += 1
+                raise RuntimeError("conflict")
+            if args[:2] == ("diff", "--name-only"):
+                return "a.txt\nb.txt\n"
+            if args[0] == "add":
+                return ""
+            raise AssertionError(args)
+
+        def fake_explain(message: str) -> None:
+            explains.append(message)
+
+        def fake_confirm(prompt: str) -> bool:
+            confirms.append(prompt)
+            return True
+
+        def fake_editor(paths, *, cwd):
+            editor_calls.append(tuple(paths))
+
+        result = supagit_sweep.rebase_branch_onto(
+            run_git,
+            "work",
+            "origin/main",
+            cwd=Path("/repo"),
+            dry_run=False,
+            explain=fake_explain,
+            confirm_continue=fake_confirm,
+            open_editor=fake_editor,
+        )
+        self.assertTrue(result)
+        self.assertTrue(any("a.txt" in e and "b.txt" in e for e in explains))
+        self.assertEqual(editor_calls, [("a.txt", "b.txt")])
+        self.assertEqual(len(confirms), 1)
+        self.assertIn("git:add a.txt b.txt", actions)
+        self.assertTrue(
+            any("rebase --continue" in a or a.endswith("rebase --continue") for a in actions)
+        )
+        self.assertFalse(any("rebase --abort" in a for a in actions))
+
+    def test_rebase_conflict_aborts_only_on_explicit_cancel(self) -> None:
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+        actions: list[str] = []
+
+        def run_git(*args, cwd=None, capture=True, env=None):
+            actions.append("git:" + " ".join(args))
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                raise RuntimeError("not ancestor")
+            if args[:2] == ("rev-list", "--count"):
+                return "1"
+            if args[:2] == ("branch", "--show-current"):
+                return "main\n"
+            if args[0] == "checkout":
+                return ""
+            if args[0] == "rebase" and len(args) == 2:
+                raise RuntimeError("conflict")
+            if args[:2] == ("diff", "--name-only"):
+                return "conflict.txt\n"
+            if args[:2] == ("rebase", "--abort"):
+                return ""
+            raise AssertionError(args)
+
+        with self.assertRaises(supagit_sweep.SweepError) as ctx:
+            supagit_sweep.rebase_branch_onto(
+                run_git,
+                "work",
+                "origin/main",
+                cwd=Path("/repo"),
+                dry_run=False,
+                explain=lambda _m: None,
+                confirm_continue=lambda _p: False,
+                open_editor=lambda _paths, *, cwd: None,
+            )
+        self.assertIn("git:rebase --abort", actions)
+        message = str(ctx.exception).lower()
+        self.assertIn("conflict", message)
+        # Must not push the user to run raw git as the primary fix.
+        self.assertNotIn("git rebase", message)
+
+    def test_integrate_skips_empty_pr_before_create(self) -> None:
+        import io
+        import contextlib
         import supagit_i18n
 
         supagit_i18n.set_lang("en")
@@ -1249,8 +1888,9 @@ class IntegrateBranchTests(unittest.TestCase):
                 return "origin/feature/x\n"
             return "ok"
 
-        with self.assertRaises(supagit_sweep.SweepError) as ctx:
-            supagit_sweep.integrate_branch(
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = supagit_sweep.integrate_branch(
                 run_git,
                 gh=FakeGh(),
                 remote="origin",
@@ -1259,13 +1899,14 @@ class IntegrateBranchTests(unittest.TestCase):
                 base="dev",
                 cwd=Path("/wt"),
                 message_provider=lambda: "unused",
-                reject_sensitive=lambda paths: None,
+                reject_sensitive=lambda paths, cwd: list(paths),
                 dry_run=False,
                 contained_in_first=False,
             )
         self.assertFalse(created)
-        self.assertIn("empty", str(ctx.exception).lower())
-        self.assertIn("feature/x", str(ctx.exception))
+        self.assertTrue(result.skipped)
+        self.assertEqual(result.reason, "already merged")
+        self.assertIn("nothing to merge", buf.getvalue().lower())
 
     def test_assert_commits_for_pr_ok(self) -> None:
         def run_git(*args, cwd=None, capture=True):
@@ -1286,6 +1927,25 @@ class IntegrateBranchTests(unittest.TestCase):
             cwd=Path("/wt"),
         )
         self.assertEqual(count, 3)
+
+    def test_assert_commits_for_pr_empty_returns_zero(self) -> None:
+        def run_git(*args, cwd=None, capture=True):
+            if args[0] == "fetch":
+                return ""
+            if args[:2] == ("rev-parse", "--verify"):
+                return "ok"
+            if args[:2] == ("rev-list", "--count"):
+                return "0"
+            raise AssertionError(args)
+
+        count = supagit_sweep.assert_commits_for_pr(
+            run_git,
+            head="feature/x",
+            base="dev",
+            remote="origin",
+            cwd=Path("/wt"),
+        )
+        self.assertEqual(count, 0)
 
     def test_integrate_ffs_clean_behind_feature_before_push(self) -> None:
         actions: list[str] = []
@@ -1345,7 +2005,7 @@ class IntegrateBranchTests(unittest.TestCase):
             base="dev",
             cwd=Path("/wt"),
             message_provider=lambda: "unused",
-            reject_sensitive=lambda paths: None,
+            reject_sensitive=lambda paths, cwd: list(paths),
             dry_run=False,
             contained_in_first=False,
         )
@@ -1354,16 +2014,22 @@ class IntegrateBranchTests(unittest.TestCase):
         self.assertLess(merge_ff, push_i)
         self.assertEqual(tips["feature/x"], "new")
 
-    def test_contained_branch_fails_closed(self) -> None:
+    def test_contained_branch_skips_instead_of_error(self) -> None:
+        import io
+        import contextlib
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+
         class FakeGh:
             def ensure_ready(self) -> None:
-                return None
+                raise AssertionError("should not touch gh")
 
             def ensure_github_remote(self, remote_url: str) -> None:
-                return None
+                raise AssertionError("should not touch gh")
 
             def find_open_pr(self, head: str, base: str) -> int | None:
-                return None
+                raise AssertionError("should not create")
 
             def create_pr(self, head: str, base: str, title: str) -> int:
                 raise AssertionError("should not create")
@@ -1371,8 +2037,9 @@ class IntegrateBranchTests(unittest.TestCase):
             def merge_pr(self, number: int, **kwargs) -> None:
                 raise AssertionError("should not merge")
 
-        with self.assertRaises(supagit_sweep.SweepError):
-            supagit_sweep.integrate_branch(
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = supagit_sweep.integrate_branch(
                 lambda *a, **k: "",
                 gh=FakeGh(),
                 remote="origin",
@@ -1381,10 +2048,13 @@ class IntegrateBranchTests(unittest.TestCase):
                 base="dev",
                 cwd=Path("/repo"),
                 message_provider=lambda: "x",
-                reject_sensitive=lambda paths: None,
+                reject_sensitive=lambda paths, cwd: list(paths),
                 dry_run=False,
                 contained_in_first=True,
             )
+        self.assertTrue(result.skipped)
+        self.assertEqual(result.reason, "already merged")
+        self.assertIn("nothing to merge", buf.getvalue().lower())
 
 
 class CleanupTests(unittest.TestCase):
@@ -1469,13 +2139,127 @@ sys.modules[SPEC.name] = ENGINE
 SPEC.loader.exec_module(ENGINE)
 
 
+class SensitivePathGuardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+
+    def _pipeline(self, *, yes: bool = True, dry_run: bool = False):
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.root = Path("/tmp/unused")
+        pipeline.options = ENGINE.Options(
+            dry_run=dry_run,
+            yes=yes,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        return pipeline
+
+    def test_all_sensitive_raises(self) -> None:
+        pipeline = self._pipeline()
+        with self.assertRaises(ENGINE.ShipError) as ctx:
+            pipeline._reject_sensitive_paths([".env.local", "secret.pem"], cwd=Path("/wt"))
+        self.assertIn(".env.local", str(ctx.exception))
+        self.assertIn("secret.pem", str(ctx.exception))
+
+    def test_mixed_paths_exclude_and_append_gitignore(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("print(1)\n", encoding="utf-8")
+            (root / ".env.local").write_text("SECRET=1\n", encoding="utf-8")
+            pipeline = self._pipeline(yes=True)
+            pipeline.root = root
+
+            safe = list(
+                pipeline._reject_sensitive_paths(
+                    ["app.py", ".env.local"],
+                    cwd=root,
+                )
+            )
+            self.assertIn("app.py", safe)
+            self.assertNotIn(".env.local", safe)
+            self.assertIn(".gitignore", safe)
+            gitignore = (root / ".gitignore").read_text(encoding="utf-8")
+            self.assertIn(".env*", gitignore)
+
+    def test_gitignore_confirm_declined_still_excludes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pipeline = self._pipeline(yes=False)
+            pipeline.root = root
+            pipeline.ask_yes_no = lambda message, default_yes=True: False  # type: ignore[method-assign]
+            pipeline.explain = lambda *a, **k: None  # type: ignore[method-assign]
+
+            safe = list(
+                pipeline._reject_sensitive_paths(
+                    ["app.py", ".env"],
+                    cwd=root,
+                )
+            )
+            self.assertEqual(safe, ["app.py"])
+            self.assertFalse((root / ".gitignore").exists())
+
+    def test_no_sensitive_returns_paths_unchanged(self) -> None:
+        pipeline = self._pipeline()
+        paths = ["app.py", "README.md"]
+        self.assertEqual(
+            list(pipeline._reject_sensitive_paths(paths, cwd=Path("/wt"))),
+            paths,
+        )
+
+
 class OrchestrationTests(unittest.TestCase):
     def setUp(self) -> None:
         import supagit_i18n
 
         supagit_i18n.set_lang("en")
 
-    def test_yes_without_flags_fails(self) -> None:
+    def test_yes_without_flags_fails_when_ambiguous(self) -> None:
+        """Multiple pending features without --integrate → still need flags."""
+        layout = RepoLayout(
+            launch_root=Path("/repo"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=False,
+        )
+        inv = RepoInventory(
+            layout,
+            (),
+            (
+                BranchInfo(
+                    "dev", True, True, Path("/repo"), 0, 0, True, "origin/dev", False
+                ),
+                BranchInfo(
+                    "feature/a",
+                    False,
+                    True,
+                    Path("/wt-a"),
+                    1,
+                    0,
+                    False,
+                    None,
+                    True,
+                ),
+                BranchInfo(
+                    "feature/b",
+                    False,
+                    True,
+                    Path("/wt-b"),
+                    1,
+                    0,
+                    False,
+                    None,
+                    True,
+                ),
+            ),
+            "dev",
+        )
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
         pipeline.options = ENGINE.Options(
             dry_run=False,
@@ -1488,8 +2272,9 @@ class OrchestrationTests(unittest.TestCase):
             pipeline_order=None,
             cleanup=None,
         )
+        pipeline.branches = ("dev",)
         with self.assertRaisesRegex(ENGINE.ShipError, "--integrate"):
-            pipeline._require_noninteractive_selection()
+            pipeline._require_noninteractive_selection(inv)
 
     def test_yes_with_no_sweep_ok(self) -> None:
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
@@ -1504,9 +2289,57 @@ class OrchestrationTests(unittest.TestCase):
             pipeline_order=None,
             cleanup=False,
         )
-        pipeline._require_noninteractive_selection()
+        pipeline._require_noninteractive_selection(_fake_inventory())
 
-    def test_run_yes_without_flags_fails_before_preflight_repo(self) -> None:
+    def test_yes_infers_defaults_when_unambiguous(self) -> None:
+        """--yes without --integrate/--pipeline uses default_integrate_names + config."""
+        inv = _fake_inventory()  # one pending: feature/x; pipeline branches configured
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=False,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.branches = ("dev", "pre", "prod")
+        pipeline.remote = "origin"
+        pipeline.original_branch = "dev"
+        pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
+
+        pipeline._require_noninteractive_selection(inv)
+        selection = pipeline.run_branch_menu(inv)
+        self.assertEqual(selection.integrate, ("feature/x",))
+        self.assertEqual(selection.pipeline, ("dev", "pre", "prod"))
+
+    def test_run_yes_ambiguous_fails_after_inventory(self) -> None:
+        """Ambiguous --yes still fails closed, but only after inventory exists."""
+        layout = RepoLayout(
+            launch_root=Path("/repo"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=False,
+        )
+        inv = RepoInventory(
+            layout,
+            (),
+            (
+                BranchInfo(
+                    "dev", True, True, Path("/repo"), 0, 0, True, "origin/dev", False
+                ),
+                BranchInfo(
+                    "feature/a", False, False, None, 1, 0, False, None, False
+                ),
+                BranchInfo(
+                    "feature/b", False, False, None, 1, 0, False, None, False
+                ),
+            ),
+            "dev",
+        )
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
         pipeline.options = ENGINE.Options(
             dry_run=False,
@@ -1519,20 +2352,18 @@ class OrchestrationTests(unittest.TestCase):
             pipeline_order=None,
             cleanup=None,
         )
-        git_calls: list[tuple] = []
+        pipeline.branches = ("dev",)
+        preflight_called = False
 
-        def fail_if_called() -> None:
-            raise AssertionError("preflight_repo should not be called")
+        def mark_preflight() -> None:
+            nonlocal preflight_called
+            preflight_called = True
 
-        def fail_git(*args, **kwargs):
-            git_calls.append(args)
-            raise AssertionError(f"git should not be called: {args}")
-
-        pipeline.preflight_repo = fail_if_called  # type: ignore[method-assign]
-        pipeline.git = fail_git  # type: ignore[method-assign]
+        pipeline.preflight_repo = mark_preflight  # type: ignore[method-assign]
+        pipeline.build_inventory = lambda **_k: inv  # type: ignore[method-assign]
         with self.assertRaisesRegex(ENGINE.ShipError, "--integrate"):
             pipeline.run()
-        self.assertEqual(git_calls, [])
+        self.assertTrue(preflight_called)
 
     def test_optional_cleanup_rebuilds_inventory(self) -> None:
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
@@ -1608,7 +2439,7 @@ class OrchestrationTests(unittest.TestCase):
 
         pipeline.build_inventory = build_inventory  # type: ignore[method-assign]
         pipeline.preflight_repo = lambda: None  # type: ignore[method-assign]
-        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
         pipeline.run_branch_menu = lambda inv: supagit_menu.MenuSelection(  # type: ignore[method-assign]
             integrate=("feature/x",), pipeline=("pre", "dev", "prod")
         )
@@ -1676,6 +2507,8 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.remote = "origin"
         pipeline.original_branch = current
         pipeline.project_name = "demo"
+        pipeline.backend = ENGINE.BackendConfig(provider="none", cli=None, targets={})
+        pipeline.cli = None
         calls: list[tuple] = []
         explained: list[str] = []
         refs = verify_refs if verify_refs is not None else {
@@ -1708,6 +2541,8 @@ class OrchestrationTests(unittest.TestCase):
                 return ""
             if args[0] == "checkout":
                 return ""
+            if args[0] == "switch":
+                return ""
             if args[0] == "add":
                 return ""
             if args[0] == "commit":
@@ -1723,7 +2558,7 @@ class OrchestrationTests(unittest.TestCase):
         pipeline._sweep_git = (  # type: ignore[method-assign]
             lambda *a, cwd=None, capture=True: git(*a, capture=capture, cwd=cwd)
         )
-        pipeline._reject_sensitive_paths = lambda paths: None  # type: ignore[method-assign]
+        pipeline._reject_sensitive_paths = lambda paths, cwd=None: list(paths)  # type: ignore[method-assign]
 
         def capture_explain(
             message: str, *, ask_continue: bool = True, force_confirm: bool = False
@@ -1733,6 +2568,74 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.explain = capture_explain  # type: ignore[method-assign]
         pipeline.confirm = lambda message, force=False: None  # type: ignore[method-assign]
         return pipeline, calls, explained
+
+    def _pipeline_for_launch_worktree(
+        self,
+        *,
+        dry_run: bool = False,
+        yes: bool = True,
+        main_branch: str = "main",
+        launch_branch: str = "feat-x",
+        launch_dirty: str = "",
+        message: str | None = "save work",
+    ) -> tuple[ENGINE.Pipeline, list[tuple]]:
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=dry_run,
+            yes=yes,
+            config_path=None,
+            message=message,
+            color="never",
+            no_sweep=False,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        main_root = Path("/repo")
+        launch_root = Path("/wt")
+        pipeline.layout = RepoLayout(
+            launch_root=launch_root,
+            main_root=main_root,
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=True,
+        )
+        pipeline.launch_root = launch_root
+        pipeline.main_root = main_root
+        pipeline.root = main_root
+        pipeline.dev = "main"
+        pipeline.branches = ("main", "prod")
+        pipeline.remote = "origin"
+        pipeline.original_branch = launch_branch
+        pipeline.project_name = "demo"
+        git_calls: list[tuple] = []
+        dirty_state = {"value": launch_dirty}
+
+        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+            git_calls.append((args, cwd))
+            if args[:2] == ("branch", "--show-current"):
+                if cwd == launch_root:
+                    return f"{launch_branch}\n"
+                return f"{main_branch}\n"
+            if args[:2] == ("status", "--porcelain"):
+                if cwd == launch_root:
+                    return dirty_state["value"]
+                return ""
+            if args[0] == "add":
+                return ""
+            if args[0] == "commit":
+                dirty_state["value"] = ""
+                return ""
+            if args[:2] == ("diff", "--cached"):
+                return "a.txt\n" if args[-1] == "--name-only" else ""
+            raise AssertionError(f"unexpected git call: {args} cwd={cwd}")
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline._sweep_git = (  # type: ignore[method-assign]
+            lambda *a, cwd=None, capture=True: git(*a, capture=capture, cwd=cwd)
+        )
+        pipeline.explain = lambda *_a, **_k: None  # type: ignore[method-assign]
+        pipeline.confirm = lambda *_a, **_k: None  # type: ignore[method-assign]
+        return pipeline, git_calls
 
     def test_preflight_non_linked_wrong_branch_ok(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(current="feature/x", linked=False)
@@ -1830,6 +2733,43 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.ensure_checkout_on_first_branch()
         self.assertFalse(any(c[0] == "checkout" for c in calls))
         self.assertFalse(any(c[:2] == ("status", "--porcelain") for c in calls))
+
+    def test_main_on_pipeline0_dirty_launch_feature_is_committed_and_integrated(self) -> None:
+        pipeline, git_calls = self._pipeline_for_launch_worktree(
+            launch_branch="feat-x", launch_dirty=" M a.txt\n?? b.txt\n"
+        )
+        committed = pipeline.ensure_checkout_on_first_branch()
+        self.assertEqual(committed, "feat-x")
+        launch_root = pipeline.launch_root
+        self.assertTrue(
+            any(
+                args[:2] == ("add", "--") and cwd == launch_root
+                for args, cwd in git_calls
+            ),
+            f"expected selective git add in {launch_root}, got {git_calls}",
+        )
+        self.assertFalse(
+            any(args[:2] == ("add", "-A") for args, _ in git_calls),
+            "secrets guard must not use git add -A",
+        )
+        self.assertTrue(
+            any(args[0] == "commit" and cwd == launch_root for args, cwd in git_calls)
+        )
+        self.assertFalse(any(args[0] == "checkout" for args, _ in git_calls))
+        selection = supagit_menu.MenuSelection(integrate=(), pipeline=("main", "prod"))
+        with patch.object(supagit_inventory, "branch_contained", return_value=False):
+            updated = pipeline._extend_integrate_after_pre_commit(selection, committed)
+        self.assertEqual(updated.integrate, ("feat-x",))
+
+    def test_main_on_pipeline0_clean_launch_worktree_returns_early(self) -> None:
+        pipeline, git_calls = self._pipeline_for_launch_worktree(
+            launch_branch="feat-x", launch_dirty=""
+        )
+        committed = pipeline.ensure_checkout_on_first_branch()
+        self.assertIsNone(committed)
+        self.assertFalse(any(args[0] == "commit" for args, _ in git_calls))
+        self.assertFalse(any(args[0] == "add" for args, _ in git_calls))
+        self.assertFalse(any(args[0] == "checkout" for args, _ in git_calls))
 
     def test_ensure_checkout_yes_clean_no_input(self) -> None:
         pipeline, calls, _ = self._pipeline_for_reposition(
@@ -2076,7 +3016,7 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.optional_cleanup = mark("optional_cleanup")  # type: ignore[method-assign]
         pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
         pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
-        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
         pipeline.run()
         self.assertEqual(order[0], "preflight_repo")
         self.assertIn("ensure_checkout_on_first_branch", order)
@@ -2090,6 +3030,636 @@ class OrchestrationTests(unittest.TestCase):
             order.index("ff_sync_first_branch"),
         )
         self.assertEqual(order[-1], "verify_final_checkout")
+
+    def test_pipeline0_db_checkpoint_runs_before_feature_merges(self) -> None:
+        # with backend=supabase, migrate of pipeline[0] must precede sweep_features
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message="test",
+            color="never",
+            no_sweep=False,
+            integrate="feature/x",
+            pipeline_order="dev,pre,prod",
+            cleanup=False,
+        )
+        pipeline.branches = ("dev", "pre", "prod")
+        pipeline.dev = "dev"
+        pipeline.pre = "pre"
+        pipeline.prod = "prod"
+        pipeline.remote = "origin"
+        pipeline.original_branch = "dev"
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase",
+            cli="supabase",
+            targets={"dev": "dev-ref", "pre": "pre-ref", "prod": "prod-ref"},
+        )
+        order: list[str] = []
+
+        def mark(name: str):
+            def _inner(*args, **kwargs):
+                order.append(name)
+                if name == "build_inventory":
+                    return _fake_inventory()
+                if name == "run_branch_menu":
+                    return supagit_menu.MenuSelection(
+                        integrate=("feature/x",), pipeline=("dev", "pre", "prod")
+                    )
+                return None
+
+            return _inner
+
+        def database_checkpoint(label: str, project_ref: str) -> None:
+            order.append(f"database_checkpoint:{label}:{project_ref}")
+
+        def promote(source: str, target: str) -> None:
+            order.append(f"promote:{source}:{target}")
+
+        for name in (
+            "preflight_repo",
+            "build_inventory",
+            "run_branch_menu",
+            "ensure_checkout_on_first_branch",
+            "validate_pipeline_head",
+            "commit_and_publish_dev",
+            "sweep_features",
+            "ff_sync_first_branch",
+            "_assert_dev_synced",
+            "run_checks",
+            "validate_clean_after_checks",
+            "return_to_dev",
+            "verify_final_checkout",
+        ):
+            setattr(pipeline, name, mark(name))
+        pipeline.database_checkpoint = database_checkpoint  # type: ignore[method-assign]
+        pipeline.promote = promote  # type: ignore[method-assign]
+        pipeline.optional_cleanup = mark("optional_cleanup")  # type: ignore[method-assign]
+        pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
+
+        pipeline.run()
+
+        self.assertIn("database_checkpoint:dev:dev-ref", order)
+        self.assertIn("sweep_features", order)
+        self.assertLess(
+            order.index("database_checkpoint:dev:dev-ref"),
+            order.index("sweep_features"),
+        )
+        self.assertLess(
+            order.index("database_checkpoint:dev:dev-ref"),
+            order.index("commit_and_publish_dev"),
+        )
+        self.assertLess(
+            order.index("database_checkpoint:pre:pre-ref"),
+            order.index("promote:dev:pre"),
+        )
+        self.assertLess(
+            order.index("database_checkpoint:prod:prod-ref"),
+            order.index("promote:pre:prod"),
+        )
+
+    def test_init_keys_environments_by_pipeline_branch_names(self) -> None:
+        """Custom pipeline branches become environment keys (not legacy pre/prod)."""
+        config = ENGINE.init_project_config(
+            "supabase",
+            "SUPABASE_PRE_PROJECT_REF",
+            "SUPABASE_PROD_PROJECT_REF",
+            ["main", "production"],
+        )
+        self.assertEqual(config["branches"], ["main", "production"])
+        envs = config["backend"]["environments"]
+        self.assertIn("main", envs)
+        self.assertIn("production", envs)
+        self.assertNotIn("pre", envs)
+        self.assertNotIn("prod", envs)
+        self.assertEqual(
+            envs["main"]["project_ref_env"], "SUPABASE_PRE_PROJECT_REF"
+        )
+        self.assertEqual(
+            envs["production"]["project_ref_env"], "SUPABASE_PROD_PROJECT_REF"
+        )
+
+    def test_custom_pipeline_main_production_migrates_production(self) -> None:
+        """Branch-keyed targets: production must be migrated before promote (no soft skip)."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message="test",
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.branches = ("main", "production")
+        pipeline.dev = "main"
+        pipeline.pre = "production"
+        pipeline.prod = "production"
+        pipeline.remote = "origin"
+        pipeline.original_branch = "main"
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase",
+            cli="supabase",
+            targets={"main": "main-ref", "production": "prod-ref"},
+        )
+        order: list[str] = []
+
+        def mark(name: str):
+            def _inner(*args, **kwargs):
+                order.append(name)
+                if name == "build_inventory":
+                    return _fake_inventory()
+                return None
+
+            return _inner
+
+        def database_checkpoint(label: str, project_ref: str) -> None:
+            order.append(f"database_checkpoint:{label}:{project_ref}")
+
+        def promote(source: str, target: str) -> None:
+            order.append(f"promote:{source}:{target}")
+
+        for name in (
+            "preflight_repo",
+            "build_inventory",
+            "ensure_checkout_on_first_branch",
+            "validate_pipeline_head",
+            "commit_and_publish_dev",
+            "ff_sync_first_branch",
+            "_assert_dev_synced",
+            "run_checks",
+            "validate_clean_after_checks",
+            "return_to_dev",
+            "verify_final_checkout",
+        ):
+            setattr(pipeline, name, mark(name))
+        pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
+        pipeline.database_checkpoint = database_checkpoint  # type: ignore[method-assign]
+        pipeline.promote = promote  # type: ignore[method-assign]
+        pipeline.optional_cleanup = mark("optional_cleanup")  # type: ignore[method-assign]
+        pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.maybe_return_to_start_branch = lambda: None  # type: ignore[method-assign]
+
+        pipeline.run()
+
+        self.assertIn("database_checkpoint:main:main-ref", order)
+        self.assertIn("database_checkpoint:production:prod-ref", order)
+        self.assertLess(
+            order.index("database_checkpoint:production:prod-ref"),
+            order.index("promote:main:production"),
+        )
+
+    def test_backend_target_exact_branch_never_legacy_index_guess(self) -> None:
+        """Legacy pre/prod keys must not match by pipeline index when branch names differ."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.branches = ("main", "production")
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase",
+            cli="supabase",
+            targets={"pre": "pre-ref", "prod": "prod-ref"},
+        )
+        self.assertIsNone(pipeline._backend_target_for_branch("main", 0))
+        self.assertIsNone(pipeline._backend_target_for_branch("production", 1))
+        # Even with a 3-branch pipeline, index must not map to pre/prod roles.
+        pipeline.branches = ("main", "staging", "production")
+        self.assertIsNone(pipeline._backend_target_for_branch("staging", 1))
+        self.assertIsNone(pipeline._backend_target_for_branch("production", 2))
+
+    def test_supabase_missing_destination_ref_fails_closed(self) -> None:
+        """provider=supabase + missing destination ref → ShipError (no soft skip)."""
+        import supagit_i18n
+
+        en_tmpl = (
+            "No database migration target configured for branch {branch}; "
+            "aborting before any code merge."
+        )
+        es_tmpl = (
+            "No hay destino de migración de base de datos configurado para la rama "
+            "{branch}; se aborta antes de fusionar código."
+        )
+        self.assertEqual(
+            set(supagit_i18n._MESSAGES["en"]), set(supagit_i18n._MESSAGES["es"])
+        )
+        self.assertEqual(
+            supagit_i18n._MESSAGES["en"]["error_migrate_no_target"], en_tmpl
+        )
+        self.assertEqual(
+            supagit_i18n._MESSAGES["es"]["error_migrate_no_target"], es_tmpl
+        )
+
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message="test",
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.branches = ("main", "production")
+        pipeline.dev = "main"
+        pipeline.pre = "production"
+        pipeline.prod = "production"
+        pipeline.remote = "origin"
+        pipeline.original_branch = "main"
+        # Legacy-keyed targets: exact branch lookup misses → must fail closed, not soft skip.
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase",
+            cli="supabase",
+            targets={"pre": "pre-ref", "prod": "prod-ref"},
+        )
+        pipeline.preflight_repo = lambda: None  # type: ignore[method-assign]
+        pipeline.build_inventory = lambda **_k: _fake_inventory()  # type: ignore[method-assign]
+        pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
+        pipeline.ensure_checkout_on_first_branch = lambda: None  # type: ignore[method-assign]
+        pipeline.validate_pipeline_head = lambda: None  # type: ignore[method-assign]
+        pipeline.commit_and_publish_dev = lambda **_k: None  # type: ignore[method-assign]
+        pipeline.ff_sync_first_branch = lambda: None  # type: ignore[method-assign]
+        pipeline._assert_dev_synced = lambda: None  # type: ignore[method-assign]
+        pipeline.run_checks = lambda: None  # type: ignore[method-assign]
+        pipeline.validate_clean_after_checks = lambda: None  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+
+        def refuse_checkpoint(*_a, **_k) -> None:
+            raise AssertionError("checkpoint should not run when destination lacks ref")
+
+        pipeline.database_checkpoint = refuse_checkpoint  # type: ignore[method-assign]
+        pipeline.promote = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.return_to_dev = lambda: None  # type: ignore[method-assign]
+        pipeline.optional_cleanup = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.verify_final_checkout = lambda: None  # type: ignore[method-assign]
+        pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.maybe_return_to_start_branch = lambda: None  # type: ignore[method-assign]
+
+        for lang in ("en", "es"):
+            with self.subTest(lang=lang):
+                supagit_i18n.set_lang(lang)
+                with self.assertRaises(ENGINE.ShipError) as ctx:
+                    pipeline.run()
+                msg = str(ctx.exception)
+                self.assertIn("main", msg)
+                self.assertNotIn("skipping checkpoint", msg.lower())
+                self.assertNotIn("se omite el checkpoint", msg.lower())
+
+    def test_database_checkpoint_failure_aborts_before_merge(self) -> None:
+        """Failed pipeline[0] checkpoint must abort — never merge/promote."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message="test",
+            color="never",
+            no_sweep=False,
+            integrate="feature/x",
+            pipeline_order="dev,pre,prod",
+            cleanup=False,
+        )
+        pipeline.branches = ("dev", "pre", "prod")
+        pipeline.dev = "dev"
+        pipeline.pre = "pre"
+        pipeline.prod = "prod"
+        pipeline.remote = "origin"
+        pipeline.original_branch = "dev"
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase",
+            cli="supabase",
+            targets={"dev": "dev-ref", "pre": "pre-ref", "prod": "prod-ref"},
+        )
+        order: list[str] = []
+
+        def mark(name: str):
+            def _inner(*args, **kwargs):
+                order.append(name)
+                if name == "build_inventory":
+                    return _fake_inventory()
+                if name == "run_branch_menu":
+                    return supagit_menu.MenuSelection(
+                        integrate=("feature/x",), pipeline=("dev", "pre", "prod")
+                    )
+                return None
+
+            return _inner
+
+        def fail_checkpoint(label: str, project_ref: str) -> None:
+            order.append(f"database_checkpoint:{label}:{project_ref}")
+            raise ENGINE.ShipError(
+                f"Command failed: supabase db push --linked: auth expired ({label})"
+            )
+
+        def promote(source: str, target: str) -> None:
+            order.append(f"promote:{source}:{target}")
+
+        for name in (
+            "preflight_repo",
+            "build_inventory",
+            "run_branch_menu",
+            "ensure_checkout_on_first_branch",
+            "validate_pipeline_head",
+            "commit_and_publish_dev",
+            "sweep_features",
+            "ff_sync_first_branch",
+            "_assert_dev_synced",
+            "run_checks",
+            "validate_clean_after_checks",
+            "return_to_dev",
+            "verify_final_checkout",
+        ):
+            setattr(pipeline, name, mark(name))
+        pipeline.database_checkpoint = fail_checkpoint  # type: ignore[method-assign]
+        pipeline.promote = promote  # type: ignore[method-assign]
+        pipeline.optional_cleanup = mark("optional_cleanup")  # type: ignore[method-assign]
+        pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
+
+        with self.assertRaises(ENGINE.ShipError) as ctx:
+            pipeline.run()
+        self.assertIn("auth expired", str(ctx.exception))
+        self.assertEqual(order.count("database_checkpoint:dev:dev-ref"), 1)
+        self.assertNotIn("commit_and_publish_dev", order)
+        self.assertNotIn("sweep_features", order)
+        self.assertFalse(any(item.startswith("promote:") for item in order))
+
+    def test_promotion_checkpoint_failure_aborts_before_promote(self) -> None:
+        """Failed target checkpoint in the promotion loop must not call promote."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message="test",
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.branches = ("dev", "pre", "prod")
+        pipeline.dev = "dev"
+        pipeline.pre = "pre"
+        pipeline.prod = "prod"
+        pipeline.remote = "origin"
+        pipeline.original_branch = "dev"
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase",
+            cli="supabase",
+            targets={"dev": "dev-ref", "pre": "pre-ref", "prod": "prod-ref"},
+        )
+        order: list[str] = []
+
+        def mark(name: str):
+            def _inner(*args, **kwargs):
+                order.append(name)
+                if name == "build_inventory":
+                    return _fake_inventory()
+                return None
+
+            return _inner
+
+        def checkpoint(label: str, project_ref: str) -> None:
+            order.append(f"database_checkpoint:{label}:{project_ref}")
+            if label == "pre":
+                raise ENGINE.ShipError("Command failed: supabase db push: refused")
+
+        def promote(source: str, target: str) -> None:
+            order.append(f"promote:{source}:{target}")
+
+        for name in (
+            "preflight_repo",
+            "build_inventory",
+            "ensure_checkout_on_first_branch",
+            "validate_pipeline_head",
+            "commit_and_publish_dev",
+            "ff_sync_first_branch",
+            "_assert_dev_synced",
+            "run_checks",
+            "validate_clean_after_checks",
+            "return_to_dev",
+            "verify_final_checkout",
+        ):
+            setattr(pipeline, name, mark(name))
+        pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
+        pipeline.database_checkpoint = checkpoint  # type: ignore[method-assign]
+        pipeline.promote = promote  # type: ignore[method-assign]
+        pipeline.optional_cleanup = mark("optional_cleanup")  # type: ignore[method-assign]
+        pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.maybe_return_to_start_branch = lambda: None  # type: ignore[method-assign]
+
+        with self.assertRaises(ENGINE.ShipError) as ctx:
+            pipeline.run()
+        self.assertIn("refused", str(ctx.exception))
+        self.assertIn("database_checkpoint:dev:dev-ref", order)
+        self.assertIn("database_checkpoint:pre:pre-ref", order)
+        self.assertNotIn("promote:dev:pre", order)
+        self.assertNotIn("promote:pre:prod", order)
+        self.assertNotIn("database_checkpoint:prod:prod-ref", order)
+
+    def test_database_checkpoint_wraps_run_raw_failure_as_ship_error(self) -> None:
+        """Non-ShipError from db push must become ShipError (fail-closed)."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.cli = "supabase"
+        pipeline.linked_ref = None
+        pipeline.root = Path("/repo")
+        unlinked: list[bool] = []
+
+        def link_supabase(project_ref: str) -> None:
+            pipeline.linked_ref = project_ref
+
+        def unlink_supabase() -> None:
+            unlinked.append(True)
+            pipeline.linked_ref = None
+
+        def run_raw(command: Sequence[str], **kwargs):
+            parts = [str(p) for p in command]
+            if "db" in parts and "push" in parts and "--dry-run" in parts:
+                return "Pending migrations would be applied.\n"
+            if "db" in parts and "push" in parts:
+                raise OSError("supabase CLI crashed during db push")
+            raise AssertionError(f"unexpected command: {parts}")
+
+        pipeline.link_supabase = link_supabase  # type: ignore[method-assign]
+        pipeline.unlink_supabase = unlink_supabase  # type: ignore[method-assign]
+        pipeline.run_raw = run_raw  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+
+        with self.assertRaises(ENGINE.ShipError) as ctx:
+            pipeline.database_checkpoint("dev", "dev-ref")
+        text = str(ctx.exception)
+        self.assertIn("dev", text)
+        self.assertIn("crashed", text)
+        self.assertTrue(unlinked, "unlink must still run after checkpoint failure")
+
+    def test_database_checkpoint_blocks_on_remote_migration_drift(self) -> None:
+        """After push looks clean, remote history must still match local filenames."""
+        import tempfile
+
+        import supagit_i18n
+
+        supagit_i18n.set_lang("en")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            migrations = root / "supabase" / "migrations"
+            migrations.mkdir(parents=True)
+            (migrations / "20240101000000_init.sql").write_text("-- local\n", encoding="utf-8")
+
+            pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+            pipeline.options = ENGINE.Options(
+                dry_run=False,
+                yes=True,
+                config_path=None,
+                message=None,
+                color="never",
+                no_sweep=True,
+                integrate=None,
+                pipeline_order=None,
+                cleanup=False,
+            )
+            pipeline.cli = "supabase"
+            pipeline.linked_ref = None
+            pipeline.root = root
+            commands: list[list[str]] = []
+            unlinked: list[bool] = []
+
+            def link_supabase(project_ref: str) -> None:
+                pipeline.linked_ref = project_ref
+
+            def unlink_supabase() -> None:
+                unlinked.append(True)
+                pipeline.linked_ref = None
+
+            def run_raw(command: Sequence[str], **kwargs):
+                parts = [str(p) for p in command]
+                commands.append(parts)
+                if "db" in parts and "push" in parts and "--dry-run" in parts:
+                    return "Remote database is up to date.\n"
+                if "db" in parts and "push" in parts:
+                    return "Finished supabase db push.\n"
+                if "migration" in parts and "list" in parts:
+                    # Remote has an extra version not present as a local filename.
+                    return (
+                        "        LOCAL      │     REMOTE     │     TIME (UTC)\n"
+                        "  ─────────────────┼────────────────┼──────────────────────\n"
+                        "   20240101000000  │ 20240101000000 │ 2024-01-01 00:00:00\n"
+                        "                   │ 20240202000000 │ 2024-02-02 00:00:00\n"
+                    )
+                raise AssertionError(f"unexpected command: {parts}")
+
+            pipeline.link_supabase = link_supabase  # type: ignore[method-assign]
+            pipeline.unlink_supabase = unlink_supabase  # type: ignore[method-assign]
+            pipeline.run_raw = run_raw  # type: ignore[method-assign]
+            pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+
+            with self.assertRaises(ENGINE.ShipError) as ctx:
+                pipeline.database_checkpoint("pre", "pre-ref")
+            message = str(ctx.exception)
+            self.assertIn("pre", message)
+            self.assertTrue(
+                any("migration" in c and "list" in c for c in commands),
+                f"expected migration list after push; got {commands}",
+            )
+            self.assertTrue(unlinked)
+
+    def test_migration_drift_aborts_before_promote(self) -> None:
+        """Invariant: never promote code when remote migrations drifted vs local files."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message="test",
+            color="never",
+            no_sweep=True,
+            integrate=None,
+            pipeline_order=None,
+            cleanup=False,
+        )
+        pipeline.branches = ("dev", "pre")
+        pipeline.dev = "dev"
+        pipeline.pre = "pre"
+        pipeline.prod = "prod"
+        pipeline.remote = "origin"
+        pipeline.original_branch = "dev"
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase",
+            cli="supabase",
+            targets={"dev": "dev-ref", "pre": "pre-ref"},
+        )
+        order: list[str] = []
+
+        def mark(name: str):
+            def _inner(*args, **kwargs):
+                order.append(name)
+                if name == "build_inventory":
+                    return _fake_inventory()
+                return None
+
+            return _inner
+
+        def database_checkpoint(label: str, project_ref: str) -> None:
+            order.append(f"database_checkpoint:{label}:{project_ref}")
+            if label == "pre":
+                raise ENGINE.ShipError(
+                    "migration drift for pre (remote-only 20240202000000)"
+                )
+
+        def promote(source: str, target: str) -> None:
+            order.append(f"promote:{source}:{target}")
+
+        for name in (
+            "preflight_repo",
+            "build_inventory",
+            "ensure_checkout_on_first_branch",
+            "validate_pipeline_head",
+            "commit_and_publish_dev",
+            "ff_sync_first_branch",
+            "_assert_dev_synced",
+            "run_checks",
+            "validate_clean_after_checks",
+            "return_to_dev",
+            "verify_final_checkout",
+        ):
+            setattr(pipeline, name, mark(name))
+        pipeline.apply_menu_selection = lambda selection: None  # type: ignore[method-assign]
+        pipeline._extend_integrate_after_pre_commit = (  # type: ignore[method-assign]
+            lambda selection, committed: selection
+        )
+        pipeline._explain_situation_preflight = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.database_checkpoint = database_checkpoint  # type: ignore[method-assign]
+        pipeline.promote = promote  # type: ignore[method-assign]
+        pipeline.optional_cleanup = mark("optional_cleanup")  # type: ignore[method-assign]
+        pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.maybe_return_to_start_branch = lambda: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
+
+        with self.assertRaises(ENGINE.ShipError) as ctx:
+            pipeline.run()
+        self.assertIn("migration drift", str(ctx.exception))
+        self.assertIn("database_checkpoint:dev:dev-ref", order)
+        self.assertIn("database_checkpoint:pre:pre-ref", order)
+        self.assertNotIn("promote:dev:pre", order)
 
     def test_first_branch_in_other_worktree_adopts(self) -> None:
         porcelain = (
@@ -2128,21 +3698,200 @@ class OrchestrationTests(unittest.TestCase):
         pipeline.ensure_checkout_on_first_branch()
         self.assertIn(("checkout", "main"), calls)
         self.assertTrue(any("detached HEAD at deadbee" in e for e in explained))
+        self.assertFalse(any(c[0] == "switch" for c in calls))
 
-    def test_detached_unreachable_refused(self) -> None:
-        pipeline, calls, _ = self._pipeline_for_reposition(
+    def test_detached_unreachable_auto_rescues(self) -> None:
+        pipeline, calls, explained = self._pipeline_for_reposition(
             current="",
             yes=True,
             contains="",
             short_sha="deadbee",
         )
-        with self.assertRaises(ENGINE.ShipError) as ctx:
-            pipeline.ensure_checkout_on_first_branch()
-        text = str(ctx.exception)
-        self.assertIn("deadbee", text)
-        self.assertIn("git switch -c", text)
-        self.assertNotIn("<", text)
-        self.assertFalse(any(c[0] == "checkout" for c in calls))
+        committed = pipeline.ensure_checkout_on_first_branch()
+        self.assertEqual(committed, "supagit-rescue-deadbee")
+        self.assertIn(("switch", "-c", "supagit-rescue-deadbee"), calls)
+        self.assertIn(("checkout", "main"), calls)
+        self.assertTrue(
+            any("rescued" in e.lower() and "supagit-rescue-deadbee" in e for e in explained)
+        )
+        self.assertFalse(any("git switch -c" in e for e in explained))
+
+    def test_detached_dirty_auto_rescues_commits_and_repositions(self) -> None:
+        pipeline, calls, explained = self._pipeline_for_reposition(
+            current="",
+            yes=True,
+            contains="feature/x\n",
+            short_sha="deadbee",
+            dirty=" M a.txt\n?? b.txt\n",
+            message="save work",
+        )
+        committed = pipeline.ensure_checkout_on_first_branch()
+        self.assertEqual(committed, "supagit-rescue-deadbee")
+        self.assertIn(("switch", "-c", "supagit-rescue-deadbee"), calls)
+        self.assertTrue(any(c[0] == "add" for c in calls))
+        self.assertTrue(any(c[0] == "commit" for c in calls))
+        self.assertIn(("checkout", "main"), calls)
+        self.assertTrue(
+            any("rescued" in e.lower() and "supagit-rescue-deadbee" in e for e in explained)
+        )
+        joined = "\n".join(explained) + "\n".join(str(c) for c in calls)
+        self.assertNotIn("git stash", joined.lower())
+
+    def test_preflight_fetch_prune_then_announce(self) -> None:
+        pipeline, calls, _ = self._pipeline_for_reposition(
+            current="main", linked=False, dry_run=True
+        )
+        pipeline.run_raw = lambda *a, **k: ""  # type: ignore[method-assign]
+        pipeline.preflight_repo()
+        self.assertTrue(
+            any(c[:3] == ("fetch", "--prune", "origin") for c in calls),
+            f"expected fetch --prune origin in {calls}",
+        )
+
+    def test_preflight_supabase_missing_cli_fails_before_checkpoint(self) -> None:
+        """provider=supabase + missing CLI must fail in preflight, not at checkpoint."""
+        import supagit_supabase
+
+        pipeline, _, _ = self._pipeline_for_reposition(
+            current="main", linked=False, dry_run=False, yes=True
+        )
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase", cli="supabase", targets={"dev": "dev-ref"}
+        )
+        pipeline.cli = "supabase"
+        pipeline.run_raw = lambda *a, **k: ""  # type: ignore[method-assign]
+        with patch.object(supagit_supabase.shutil, "which", return_value=None):
+            with self.assertRaises(ENGINE.ShipError) as ctx:
+                pipeline.preflight_repo()
+        self.assertIn("not installed", str(ctx.exception).lower())
+
+    def test_preflight_supabase_ready_ok(self) -> None:
+        pipeline, _, _ = self._pipeline_for_reposition(
+            current="main", linked=False, dry_run=False, yes=True
+        )
+        pipeline.backend = ENGINE.BackendConfig(
+            provider="supabase", cli="supabase", targets={"dev": "dev-ref"}
+        )
+        pipeline.cli = "supabase"
+        pipeline.run_raw = lambda *a, **k: ""  # type: ignore[method-assign]
+        calls: list[tuple] = []
+
+        def fake_ready(cli, *, dry_run, run_raw=None):
+            calls.append((cli, dry_run, run_raw))
+
+        with patch.object(
+            ENGINE.supagit_supabase, "ensure_supabase_ready", side_effect=fake_ready
+        ):
+            pipeline.preflight_repo()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "supabase")
+        self.assertFalse(calls[0][1])
+        self.assertEqual(calls[0][2].__func__, pipeline._supabase_run_raw.__func__)
+
+    def test_preflight_merge_head_aborts_before_mutation(self) -> None:
+        pipeline, calls, explained = self._pipeline_for_reposition(
+            current="main", linked=False, yes=True
+        )
+        pipeline.run_raw = lambda *a, **k: ""  # type: ignore[method-assign]
+        heads = {"MERGE_HEAD"}
+
+        original_git = pipeline.git
+
+        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+            if args[:2] == ("rev-parse", "--verify") and args[2] in {
+                "MERGE_HEAD",
+                "REBASE_HEAD",
+                "CHERRY_PICK_HEAD",
+            }:
+                if args[2] in heads:
+                    return "deadbeef\n"
+                raise ENGINE.ShipError(f"missing {args[2]}")
+            if args[:2] == ("merge", "--abort"):
+                calls.append(args)
+                heads.clear()
+                return ""
+            return original_git(*args, capture=capture, check=check, mutating=mutating, cwd=cwd)
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline.preflight_repo()
+        self.assertTrue(
+            any("merge" in e.lower() for e in explained),
+            f"expected merge explanation in {explained}",
+        )
+        self.assertIn(("merge", "--abort"), calls)
+        # Sequencer abort must run before fetch --prune so an unreachable
+        # remote cannot skip the mid-merge tutor.
+        abort_idx = calls.index(("merge", "--abort"))
+        fetch_idx = next(
+            i for i, c in enumerate(calls) if c[:3] == ("fetch", "--prune", "origin")
+        )
+        self.assertLess(
+            abort_idx,
+            fetch_idx,
+            f"sequencer abort must precede fetch --prune in {calls}",
+        )
+
+    def test_preflight_sequencer_tutor_runs_when_fetch_unreachable(self) -> None:
+        pipeline, calls, explained = self._pipeline_for_reposition(
+            current="main", linked=False, yes=True
+        )
+        pipeline.run_raw = lambda *a, **k: ""  # type: ignore[method-assign]
+        heads = {"MERGE_HEAD"}
+        original_git = pipeline.git
+
+        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+            if args[:2] == ("rev-parse", "--verify") and args[2] in {
+                "MERGE_HEAD",
+                "REBASE_HEAD",
+                "CHERRY_PICK_HEAD",
+            }:
+                if args[2] in heads:
+                    return "deadbeef\n"
+                raise ENGINE.ShipError(f"missing {args[2]}")
+            if args[:2] == ("merge", "--abort"):
+                calls.append(args)
+                heads.clear()
+                return ""
+            if args[:3] == ("fetch", "--prune", "origin"):
+                calls.append(args)
+                raise ENGINE.ShipError("Could not fetch: network unreachable")
+            return original_git(*args, capture=capture, check=check, mutating=mutating, cwd=cwd)
+
+        pipeline.git = git  # type: ignore[method-assign]
+        with self.assertRaisesRegex(ENGINE.ShipError, "network unreachable"):
+            pipeline.preflight_repo()
+        self.assertTrue(
+            any("merge" in e.lower() for e in explained),
+            f"expected merge tutor before fetch failure; explained={explained}",
+        )
+        self.assertIn(("merge", "--abort"), calls)
+        abort_idx = calls.index(("merge", "--abort"))
+        fetch_idx = calls.index(("fetch", "--prune", "origin"))
+        self.assertLess(abort_idx, fetch_idx)
+
+    def test_preflight_rebase_head_abort_declined_raises(self) -> None:
+        pipeline, calls, _ = self._pipeline_for_reposition(
+            current="main", linked=False, yes=False
+        )
+        pipeline.run_raw = lambda *a, **k: ""  # type: ignore[method-assign]
+        pipeline.ask_yes_no = lambda *_a, **_k: False  # type: ignore[method-assign]
+
+        original_git = pipeline.git
+
+        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+            if args[:2] == ("rev-parse", "--verify") and args[2] == "REBASE_HEAD":
+                return "deadbeef\n"
+            if args[:2] == ("rev-parse", "--verify") and args[2] in {
+                "MERGE_HEAD",
+                "CHERRY_PICK_HEAD",
+            }:
+                raise ENGINE.ShipError(f"missing {args[2]}")
+            return original_git(*args, capture=capture, check=check, mutating=mutating, cwd=cwd)
+
+        pipeline.git = git  # type: ignore[method-assign]
+        with self.assertRaises(ENGINE.UserAborted):
+            pipeline.preflight_repo()
+        self.assertFalse(any(c[:2] == ("rebase", "--abort") for c in calls))
 
     def test_announce_launch_checkout_explains_no_manual_switch(self) -> None:
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
@@ -2445,7 +4194,7 @@ class OrchestrationTests(unittest.TestCase):
 
         pipeline.explain = capture_explain  # type: ignore[method-assign]
         pipeline.tutor_prompt = lambda explanation, prompt: ""  # type: ignore[method-assign]
-        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
         pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
 
         selection = pipeline.run_branch_menu(_fake_inventory())
@@ -2499,7 +4248,7 @@ class OrchestrationTests(unittest.TestCase):
 
         pipeline.explain = capture_explain  # type: ignore[method-assign]
         pipeline.tutor_prompt = capture_tutor  # type: ignore[method-assign]
-        pipeline._require_noninteractive_selection = lambda: None  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
         pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
 
         selection = pipeline.run_branch_menu(inv)
@@ -2508,6 +4257,76 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(tutor_calls, [])
         self.assertTrue(any("nothing to merge" in msg.lower() or "no feature" in msg.lower() for msg in explained))
         self.assertTrue(any("pipeline for this run: main" in msg.lower() for msg in explained))
+
+    def test_run_branch_menu_single_pending_uses_confirm_skips_pipeline_order(self) -> None:
+        """One pending [✓] + one pipeline branch → one Enter confirm; no order prompt."""
+        layout = RepoLayout(
+            launch_root=Path("/repo"),
+            main_root=Path("/repo"),
+            common_dir=Path("/repo/.git"),
+            is_linked_launch=False,
+        )
+        inv = RepoInventory(
+            layout,
+            (),
+            (
+                BranchInfo(
+                    "dev", True, True, Path("/repo"), 0, 0, True, "origin/dev", False
+                ),
+                BranchInfo(
+                    "feature/x",
+                    False,
+                    True,
+                    Path("/wt"),
+                    1,
+                    0,
+                    False,
+                    None,
+                    True,
+                ),
+                BranchInfo(
+                    "old", False, False, None, 0, 0, True, None, False
+                ),
+            ),
+            "dev",
+        )
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=False,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.branches = ("dev",)
+        pipeline.remote = "origin"
+        pipeline.original_branch = "dev"
+        tutor_calls: list[tuple[str, str]] = []
+        yes_no_calls: list[str] = []
+
+        def capture_tutor(explanation: str, prompt: str) -> str:
+            tutor_calls.append((explanation, prompt))
+            raise AssertionError(
+                f"should not use multi-choice prompt; got: {prompt!r}"
+            )
+
+        def capture_yes_no(message: str, *, default_yes: bool = True) -> bool:
+            yes_no_calls.append(message)
+            self.assertTrue(default_yes)
+            return True
+
+        pipeline.explain = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.tutor_prompt = capture_tutor  # type: ignore[method-assign]
+        pipeline.ask_yes_no = capture_yes_no  # type: ignore[method-assign]
+        pipeline._require_noninteractive_selection = lambda *_a, **_k: None  # type: ignore[method-assign]
+        pipeline._explain_situation_preflight = lambda *_a, **_k: None  # type: ignore[method-assign]
+
+        selection = pipeline.run_branch_menu(inv)
+        self.assertEqual(selection.integrate, ("feature/x",))
+        self.assertEqual(selection.pipeline, ("dev",))
+        self.assertEqual(tutor_calls, [])
+        self.assertEqual(len(yes_no_calls), 1)
+        self.assertIn("Merge feature feature/x into dev?", yes_no_calls[0])
 
     def test_no_sweep_run_calls_situation_preflight(self) -> None:
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
@@ -2656,6 +4475,227 @@ class OrchestrationTests(unittest.TestCase):
         ):
             pipeline.promote("dev", "main")
         self.assertEqual(calls, ["direct"])
+
+    def test_promote_direct_adopts_worktree_holding_target(self) -> None:
+        """Promote into a branch locked in another worktree must adopt, not error."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.root = Path("/repo")
+        pipeline.main_root = Path("/repo")
+        pipeline.remote = "origin"
+        porcelain = (
+            "worktree /repo\nbranch refs/heads/dev\n\n"
+            "worktree /wt-main\nbranch refs/heads/main\n"
+        )
+        git_calls: list[tuple[tuple, Path | None]] = []
+        explained: list[str] = []
+
+        def git(
+            *args: str,
+            capture: bool = False,
+            check: bool = True,
+            mutating: bool = False,
+            cwd: Path | None = None,
+        ) -> str:
+            git_calls.append((args, cwd))
+            if args[:2] == ("worktree", "list"):
+                return porcelain
+            if args[:2] == ("branch", "--show-current"):
+                resolved = Path(cwd).resolve() if cwd is not None else Path("/repo").resolve()
+                if resolved == Path("/wt-main").resolve():
+                    return "main\n"
+                return "dev\n"
+            if args[0] in {"fetch", "merge", "push", "checkout"}:
+                return ""
+            raise AssertionError(args)
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline.explain = lambda message, **_kwargs: explained.append(message)  # type: ignore[method-assign]
+
+        # Must not raise error_first_branch_in_worktree / "worktree remove".
+        pipeline._promote_direct("dev", "main")
+
+        fetch_specs = [
+            args
+            for args, _cwd in git_calls
+            if args[:1] == ("fetch",)
+        ]
+        self.assertEqual(
+            fetch_specs,
+            [("fetch", "origin", "refs/heads/main:refs/remotes/origin/main")],
+            "promote-adopt must fetch into remote-tracking only, never refs/heads/{target}",
+        )
+        self.assertFalse(
+            any(
+                len(args) >= 3 and args[2].endswith(":refs/heads/main")
+                for args, _cwd in git_calls
+                if args[:1] == ("fetch",)
+            ),
+            "must not fetch into checked-out refs/heads/main",
+        )
+        merge_calls = [
+            (args, Path(cwd).resolve() if cwd is not None else None)
+            for args, cwd in git_calls
+            if args[:1] == ("merge",)
+        ]
+        self.assertEqual(
+            merge_calls,
+            [
+                (("merge", "--ff-only", "origin/main"), Path("/wt-main").resolve()),
+                (("merge", "dev", "--no-edit"), Path("/wt-main").resolve()),
+            ],
+        )
+        push_cwds = [
+            Path(cwd).resolve()
+            for args, cwd in git_calls
+            if args[:1] == ("push",) and cwd is not None
+        ]
+        self.assertEqual(push_cwds, [Path("/wt-main").resolve()])
+        self.assertFalse(
+            any(args[:1] == ("checkout",) for args, _cwd in git_calls),
+            "target already checked out in adopted worktree — no checkout",
+        )
+        self.assertTrue(
+            any("wt-main" in msg for msg in explained),
+            f"expected adopt explanation mentioning wt-main; got {explained!r}",
+        )
+
+    def test_commit_and_publish_rebases_when_dirty_and_behind(self) -> None:
+        """Dirty pipeline[0] behind upstream must rebase then push (not skip-push)."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message="local work",
+            color="never",
+        )
+        pipeline.root = Path("/repo")
+        pipeline.dev = "dev"
+        pipeline.remote = "origin"
+        calls: list[tuple] = []
+        rev_list_phase = {"n": 0}
+
+        def git(*args, capture: bool = False, check: bool = True, mutating: bool = False, cwd=None):
+            calls.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return " M app.py\n"
+            if args[:2] == ("diff", "--cached") and args[2:3] == ("--name-only",):
+                return "app.py\n"
+            if args[:2] == ("diff", "--cached") and args[2:3] == ("--check",):
+                return ""
+            if args[:1] == ("add",):
+                return ""
+            if args[:1] == ("commit",):
+                return ""
+            if args[:3] == ("rev-list", "--left-right", "--count"):
+                rev_list_phase["n"] += 1
+                # After commit: behind+ahead (would diverge if push skipped).
+                # After rebase+push assert: 0/0.
+                if rev_list_phase["n"] == 1:
+                    return "2\t1\n"
+                return "0\t0\n"
+            if args[:1] == ("pull",) or args[:1] == ("rebase",):
+                return ""
+            if args[:1] == ("fetch",):
+                return ""
+            if args[:1] == ("push",):
+                return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "dev\n"
+            raise AssertionError(args)
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline._reject_sensitive_paths = lambda paths, cwd=None: list(paths)  # type: ignore[method-assign]
+        pipeline._commit_message = lambda **k: "local work"  # type: ignore[method-assign]
+
+        pipeline.commit_and_publish_dev()
+
+        rebased = any(
+            (c[0] == "pull" and "--rebase" in c) or c[0] == "rebase"
+            for c in calls
+        )
+        self.assertTrue(rebased, f"expected rebase/pull --rebase in {calls}")
+        self.assertTrue(any(c[0] == "push" for c in calls), f"expected push in {calls}")
+
+    def test_commit_and_publish_unstages_prestaged_secret(self) -> None:
+        """Mixed staged secret + safe file: unstage secret, commit the rest (no abort)."""
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False,
+            yes=True,
+            config_path=None,
+            message="local work",
+            color="never",
+        )
+        pipeline.root = Path("/repo")
+        pipeline.dev = "dev"
+        pipeline.remote = "origin"
+        calls: list[tuple] = []
+        cached_reads = {"n": 0}
+        rev_list_phase = {"n": 0}
+
+        def git(*args, capture: bool = False, check: bool = True, mutating: bool = False, cwd=None):
+            calls.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return "A  .env\n M app.py\n"
+            if args[:1] == ("add",):
+                self.assertNotIn(".env", args)
+                return ""
+            if args[:2] == ("diff", "--cached") and args[2:3] == ("--name-only",):
+                cached_reads["n"] += 1
+                if cached_reads["n"] == 1:
+                    return ".env\napp.py\n"
+                return "app.py\n"
+            if args[:2] == ("restore", "--staged"):
+                self.assertIn(".env", args)
+                return ""
+            if args[:2] == ("diff", "--cached") and args[2:3] == ("--check",):
+                return ""
+            if args[:1] == ("commit",):
+                return ""
+            if args[:3] == ("rev-list", "--left-right", "--count"):
+                rev_list_phase["n"] += 1
+                # After commit: ahead only; after push sync assert: 0/0.
+                if rev_list_phase["n"] == 1:
+                    return "0\t1\n"
+                return "0\t0\n"
+            if args[:1] == ("push",):
+                return ""
+            if args[:2] == ("branch", "--show-current"):
+                return "dev\n"
+            raise AssertionError(args)
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline.tutor_confirm = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.explain = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline.ask_yes_no = lambda *a, **k: False  # type: ignore[method-assign]
+        pipeline.status = lambda *a, **k: None  # type: ignore[method-assign]
+        pipeline._commit_message = lambda **k: "local work"  # type: ignore[method-assign]
+        # Use real sensitivity helpers so leaked .env is detected.
+        pipeline._is_sensitive_path = ENGINE.Pipeline._is_sensitive_path  # type: ignore[method-assign]
+        pipeline._gitignore_patterns_for = ENGINE.Pipeline._gitignore_patterns_for  # type: ignore[method-assign]
+        pipeline._reject_sensitive_paths = ENGINE.Pipeline._reject_sensitive_paths.__get__(  # type: ignore[method-assign]
+            pipeline, ENGINE.Pipeline
+        )
+
+        pipeline.commit_and_publish_dev()
+
+        restore_calls = [c for c in calls if c[:2] == ("restore", "--staged")]
+        self.assertEqual(len(restore_calls), 1)
+        self.assertIn(".env", restore_calls[0])
+        self.assertTrue(any(c[0] == "commit" for c in calls))
+        self.assertFalse(
+            any(c[0] == "add" and ".env" in c for c in calls),
+            "must never git-add the secret",
+        )
 
 
 if __name__ == "__main__":

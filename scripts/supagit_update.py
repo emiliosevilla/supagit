@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,9 @@ SKIP_ENV = "SUPAGIT_SKIP_UPDATE"
 DEFAULT_REMOTE = "origin"
 DEFAULT_BRANCH = "main"
 GITHUB_MARKER = "github.com/emiliosevilla/supagit"
+GITHUB_CLONE_URL = "https://github.com/emiliosevilla/supagit.git"
+# Visible on every reinstall so users can confirm freshness.
+BUILD_STAMP = "2026-08-12"
 
 
 def source_root_from_marker(home: Path | None = None) -> Path | None:
@@ -28,13 +32,29 @@ def source_root_from_marker(home: Path | None = None) -> Path | None:
     marker = base / ".agents" / "skills" / "supagit" / "source-root"
     if not marker.is_file():
         return None
-    text = marker.read_text(encoding="utf-8").strip().splitlines()
+    try:
+        text = marker.read_text(encoding="utf-8").strip().splitlines()
+    except (OSError, UnicodeError):
+        # Unreadable/corrupt marker → treat as missing so ensure can self-heal.
+        return None
     if not text or not text[0].strip():
         return None
     path = Path(text[0].strip()).expanduser()
     if not path.is_dir():
         return None
     return path.resolve()
+
+
+def managed_source_root(home: Path | None = None) -> Path:
+    """Canonical self-owned clone path (~/.supagit/source)."""
+    return ((home or Path.home()) / ".supagit" / "source").resolve()
+
+
+def write_source_root_marker(source_root: Path, home: Path | None = None) -> None:
+    base = home or Path.home()
+    marker = base / ".agents" / "skills" / "supagit" / "source-root"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f"{source_root.resolve()}\n", encoding="utf-8")
 
 
 def _run(cwd: Path, *args: str) -> str:
@@ -181,26 +201,134 @@ def pull_and_reinstall(
     _run(source_root, "git", "pull", "--ff-only", DEFAULT_REMOTE, DEFAULT_BRANCH)
     installer = source_root / "scripts" / "install-supagit-global.sh"
     if not installer.is_file():
-        raise UpdateError(f"installer missing: {installer}")
+        raise UpdateError(t("update_installer_missing", path=str(installer)))
     _progress(f"[supagit] install-supagit-global.sh --lang {lang}…")
     _run_installer(source_root, installer, lang)
+    _progress(t("update_reinstalled", build=BUILD_STAMP))
+
+
+def _shallow_clone_github(dest: Path) -> None:
+    """Shallow-clone the canonical public repo into dest (replacing dest if present)."""
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            DEFAULT_BRANCH,
+            GITHUB_CLONE_URL,
+            str(dest),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "git clone failed").strip()
+        raise UpdateError(t("update_clone_failed", detail=detail))
+
+
+def _source_is_usable(source_root: Path) -> bool:
+    """True when the clone can be used for ff-only self-update (or is already current)."""
+    installer = source_root / "scripts" / "install-supagit-global.sh"
+    if not installer.is_file():
+        return False
+    try:
+        assert_github_source(source_root)
+        status = self_update_sync_status(source_root)
+    except UpdateError:
+        return False
+    if status in (
+        SyncStatus.DIVERGED,
+        SyncStatus.AHEAD_ONLY,
+        SyncStatus.NO_UPSTREAM,
+    ):
+        return False
+    if status not in (SyncStatus.IN_SYNC, SyncStatus.BEHIND_ONLY):
+        return False
+    try:
+        dirty = _run(source_root, "git", "status", "--porcelain")
+    except UpdateError:
+        return False
+    return not dirty.strip()
+
+
+def ensure_healthy_source_root(
+    home: Path | None = None,
+    *,
+    lang: str = "en",
+    progress: TextIO | None = None,
+    run_installer: bool = True,
+) -> Path:
+    """Return a healthy GitHub source root, re-cloning into ~/.supagit/source when needed.
+
+    Sets ``ensure_healthy_source_root.repaired`` to True when the managed clone was
+    adopted (marker rewrite / installer) or shallow-cloned.
+    """
+    ensure_healthy_source_root.repaired = False
+    base = home or Path.home()
+
+    def _progress(message: str) -> None:
+        if progress is not None:
+            print(message, file=progress, flush=True)
+
+    existing = source_root_from_marker(home=base)
+    if existing is not None and _source_is_usable(existing):
+        return existing
+
+    managed = managed_source_root(home=base)
+    # Prefer an already-healthy managed tree over destroying it with rmtree+clone.
+    if managed.is_dir() and _source_is_usable(managed):
+        _progress(t("update_healing_source", path=str(managed)))
+        write_source_root_marker(managed, home=base)
+        if run_installer:
+            installer = managed / "scripts" / "install-supagit-global.sh"
+            if not installer.is_file():
+                raise UpdateError(t("update_installer_missing", path=str(installer)))
+            _progress(t("update_healing_reinstall", lang=lang))
+            _run_installer(managed, installer, lang)
+            _progress(t("update_reinstalled", build=BUILD_STAMP))
+        ensure_healthy_source_root.repaired = True
+        return managed
+
+    _progress(t("update_healing_source", path=str(managed)))
+    try:
+        _shallow_clone_github(managed)
+    except UpdateError:
+        raise
+    except OSError as exc:
+        raise UpdateError(t("update_clone_failed", detail=str(exc))) from exc
+
+    write_source_root_marker(managed, home=base)
+    if run_installer:
+        installer = managed / "scripts" / "install-supagit-global.sh"
+        if not installer.is_file():
+            raise UpdateError(t("update_installer_missing", path=str(installer)))
+        _progress(t("update_healing_reinstall", lang=lang))
+        _run_installer(managed, installer, lang)
+        _progress(t("update_reinstalled", build=BUILD_STAMP))
+    ensure_healthy_source_root.repaired = True
+    return managed
+
+
+ensure_healthy_source_root.repaired = False
 
 
 def maybe_self_update_and_reexec(argv: list[str]) -> None:
     """If source is behind origin/main, update, reinstall, and re-exec once."""
     if os.environ.get(SKIP_ENV) == "1":
         return
-    source = source_root_from_marker()
-    if source is None:
-        # Running from a checkout that is itself the source: allow local scripts path.
-        candidate = Path(__file__).resolve().parent.parent
-        if (candidate / "scripts" / "install-supagit-global.sh").is_file():
-            source = candidate
-        else:
-            raise UpdateError("no_source")
-    if not needs_update(source):
+    lang = resolve_update_lang(argv)
+    source = ensure_healthy_source_root(lang=lang)
+    repaired = bool(getattr(ensure_healthy_source_root, "repaired", False))
+    if not repaired and not needs_update(source):
         return
-    pull_and_reinstall(source, lang=resolve_update_lang(argv))
+    if needs_update(source):
+        pull_and_reinstall(source, lang=lang)
     env = os.environ.copy()
     env[SKIP_ENV] = "1"
     script = Path(__file__).resolve().parent / "supagit.py"
