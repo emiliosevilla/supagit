@@ -1,83 +1,102 @@
 # supagit
 
-> A complete project release in one Terminal command.
+> Give your AI agent back its context.
 
-When an AI agent performs Git and backend operations manually, it spends time
-and tokens writing commands, explaining each step, and checking the result.
-`supagit` runs that operational work locally: it uses no AI tokens for the
-operation.
+## What it is
 
-Type this in the project directory:
+`supagit` is a local Terminal command for releasing a project through Git and
+its configured backend migrations. It replaces a long sequence of repetitive
+commands with one visible, guided operation.
 
-```bash
-supagit
-```
+When an AI agent delegates this operational work to `supagit`, the operation
+uses no AI tokens. The tool shows the plan, asks for confirmation, displays
+progress, and reports clearly what happened.
 
-`supagit` covers the full release flow: Git inspection, commits, pushes,
-pull-request integration, branch promotion, checks, and configured backend
-migrations. It shows the plan, asks for confirmation, and reports clearly what
-happened.
+## What it is used for
 
-## Why supagit
+- Inspecting the repository, branches, worktrees, and remote.
+- Committing and publishing local work.
+- Integrating branches through pull requests or direct Git operations.
+- Running configured checks and backend migrations, including Supabase.
+- Promoting code through an ordered branch pipeline.
+- Showing failures, unexpected states, and successful completion clearly.
 
-- No AI tokens for the operational flow.
-- One visible command instead of a long sequence of Git and backend steps.
-- Clear feedback when something fails, changes unexpectedly, or succeeds.
-- Pull requests when GitHub branch rules require them.
-- Backend migrations, including Supabase migrations, when the project configures them.
-- Fail-closed behavior: no forced pushes, hidden stashes, or destructive resets.
-- English or Spanish prompts, with a spinner for long-running work.
+## What it is not
 
-`supagit` works carefully: it stops on ambiguous states and does not hide
-changes or force a push. Its goal is to turn a long, repetitive process into
-one visible and controllable action.
+- It is not an AI model or an autonomous coding agent.
+- It is not a replacement for code review, tests, or CI.
+- It is not a database host or a general deployment platform.
+- It does not hide changes, stash work, force-push, or reset a dirty worktree.
 
-## Quick start
+## How to use it
 
-Install the global command:
+Run it from the repository you want to release. Do not switch branches first.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
-```
-
-Run it from the repository you want to release:
-
-```bash
-cd path/to/your-project
-supagit init --backend none
 supagit --dry-run
 supagit
 ```
 
-For a project with Supabase migrations, use `supagit init --backend supabase`.
-If `.supagit.json` already exists, skip `init`.
+If the project has no `.supagit.json`, initialize it first:
 
-## How it works
+```bash
+supagit init --backend none
+```
 
-`supagit` detects the usual `dev`, `pre`, and `prod` pipeline, or uses an
-ordered list defined by the project, for example:
+For a project with Supabase migrations, use `--backend supabase` instead.
+`supagit` detects the usual `dev`, `pre`, and `prod` pipeline. Any ordered
+pipeline can be configured, for example:
 
 ```json
 "branches": ["dev", "staging", "production"]
 ```
 
-Each run:
+The command is interactive by default. Useful options include `--yes`,
+`--lang`, `--pipeline`, `--integrate`, and `--no-sweep`. Pull-request paths
+require the GitHub CLI (`gh`) to be installed and authenticated.
 
-1. Inspects the project and shows the plan.
-2. Integrates the selected work.
-3. Runs the configured checks.
-4. Applies the required migrations, when configured.
-5. Promotes changes through the branches in the defined order.
+## How to install it
 
-The process is interactive by default. Automation options include `--yes`,
-`--lang`, `--pipeline`, `--integrate`, and `--no-sweep`.
+Install the global command from any directory:
 
-## More information
+```bash
+curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
+```
+
+The installer downloads the source, installs the global command and agent
+skill, and adds `~/.local/bin` to `PATH` when needed. Use `--lang es` for
+Spanish installer messages; the command itself supports English and Spanish.
+
+## How to uninstall it
+
+Remove the global command, skill, and agent command:
+
+```bash
+rm -f "$HOME/.local/bin/supagit" "$HOME/.claude/commands/supagit.md"
+rm -rf "$HOME/.agents/skills/supagit"
+```
+
+If you installed with the bootstrap script, also remove its downloaded source
+clone:
+
+```bash
+rm -rf "$HOME/.local/share/supagit"
+```
+
+Finally, remove the `~/.local/bin` export line from `~/.zprofile` if no other
+tool uses it.
+
+## Author
+
+Created by [Emilio Sevilla Ortego](https://github.com/emiliosevilla).
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+## Further reading
 
 - [Agent guide and safe usage](docs/supagit-agent-command.md)
 - [Configuration example](.supagit.json.example)
 - [Open and completed tasks](tasks/task.md)
-- [MIT License](LICENSE)
-
-Ideas, issues, and improvements are welcome on
-[GitHub](https://github.com/emiliosevilla/supagit).
+- [Project repository](https://github.com/emiliosevilla/supagit)

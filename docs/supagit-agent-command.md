@@ -1,6 +1,6 @@
 ---
 name: supagit
-description: Publica un proyecto desde la rama de desarrollo hasta producción, detectando las ramas remotas y migrando cada BD antes del código que la utiliza.
+description: Releases a project from development to production, detecting remote branches and running each configured backend migration before the code that uses it.
 ---
 
 # `supagit`
@@ -10,7 +10,7 @@ or from a linked worktree; when launched from a linked worktree, promotion runs
 from the main checkout while feature work may live in the launch worktree.
 
 **Never tell the user to `git switch` / `git checkout` before running
-`supagit`.** Do not invent shell placeholders such as `<rama-feature>` or
+`supagit`.** Do not invent shell placeholders such as `<feature-branch>` or
 `<branch>` — zsh treats `<…>` as redirection and the user sees a scary
 failure that has nothing to do with the project. Launch `supagit` from the
 current working directory as-is. The CLI announces the current branch, moves
