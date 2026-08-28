@@ -729,6 +729,7 @@ class Pipeline:
         check: bool = True,
         cwd: Path | None = None,
         mutating: bool = False,
+        quiet_errors: bool = False,
     ) -> str:
         rendered = shlex.join(str(part) for part in command)
         print(f"$ {rendered}")
@@ -750,7 +751,7 @@ class Pipeline:
             print(completed.stdout, end="")
         if completed.returncode != 0 and check:
             details = completed.stderr.strip() if completed.stderr else "no error output"
-            if completed.stderr:
+            if completed.stderr and not quiet_errors:
                 print(
                     colour_text(
                         completed.stderr.rstrip("\n"),
@@ -760,7 +761,7 @@ class Pipeline:
                     file=sys.stderr,
                 )
             raise ShipError(f"Command failed: {rendered}: {details}")
-        if not capture and completed.stderr:
+        if not capture and completed.stderr and not quiet_errors:
             print(completed.stderr, end="", file=sys.stderr)
         return completed.stdout if capture else ""
 
@@ -771,6 +772,7 @@ class Pipeline:
         check: bool = True,
         mutating: bool = False,
         cwd: Path | None = None,
+        quiet_errors: bool = False,
     ) -> str:
         return self.run_raw(
             ["git", *args],
@@ -778,6 +780,7 @@ class Pipeline:
             check=check,
             mutating=mutating,
             cwd=cwd,
+            quiet_errors=quiet_errors,
         )
 
     def confirm(self, message: str, *, force: bool = False) -> None:
@@ -866,7 +869,7 @@ class Pipeline:
             self.status(t("return_done", branch=start), self.GREEN)
             return
         status = self.git("status", "--porcelain", capture=True, cwd=self.root)
-        if status.strip():
+        if supagit_sweep.has_status_changes(status):
             self.explain(
                 t("return_skipped_dirty", pipeline=self.dev, branch=start)
             )
@@ -1151,14 +1154,14 @@ class Pipeline:
     def commit_and_publish_dev(self, *, integrate: Sequence[str] = ()) -> None:
         print(f"\n=== PUBLISH LOCAL CHANGES TO {self.dev} ===")
         status = self.git("status", "--porcelain", capture=True)
-        status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
+        status_paths = [path for _, path in supagit_sweep.status_entries(status)]
         safe_paths = (
             list(self._reject_sensitive_paths(status_paths, cwd=self.root))
             if status_paths
             else []
         )
 
-        if status.strip() and integrate:
+        if status_paths and integrate:
             raise ShipError(
                 t(
                     "error_dirty_pipeline_with_integrate",
@@ -1167,7 +1170,7 @@ class Pipeline:
                 )
             )
 
-        if status.strip():
+        if status_paths:
             if not safe_paths:
                 raise ShipError(t("error_only_secrets_remaining"))
             message = self._commit_message()
@@ -1175,7 +1178,14 @@ class Pipeline:
                 t("explain_commit_publish", branch=self.dev, remote=self.remote),
                 t("confirm_commit_publish", branch=self.dev, remote=self.remote),
             )
-            self.git("add", "--", *safe_paths, mutating=True)
+            if self.options.dry_run:
+                return
+            supagit_sweep.stage_safe_paths(
+                self._sweep_git,
+                status=status,
+                safe_paths=safe_paths,
+                cwd=self.root,
+            )
             staged = self.git("diff", "--cached", "--name-only", capture=True)
             staged_paths = [path for path in staged.splitlines() if path]
             leaked = [path for path in staged_paths if self._is_sensitive_path(path)]
@@ -1277,7 +1287,7 @@ class Pipeline:
             print("DRY-RUN: a clean tree is not required because checks were not run.")
             return
         status = self.git("status", "--porcelain", capture=True)
-        if status.strip():
+        if supagit_sweep.has_status_changes(status):
             raise ShipError(
                 "Checks left changes in the tree. The pipeline stops before migrating any database."
             )
@@ -1810,6 +1820,7 @@ class Pipeline:
         return self.git(
             *args,
             capture=True,
+            quiet_errors=True,
             cwd=Path(cwd) if cwd is not None else self.root,
         )
 
@@ -2009,7 +2020,7 @@ class Pipeline:
             ).strip()
             unreachable = not contains
             status = self.git("status", "--porcelain", capture=True, cwd=self.root)
-            if unreachable or status.strip():
+            if unreachable or supagit_sweep.has_status_changes(status):
                 rescued_branch = f"supagit-rescue-{sha}"
                 self.explain(
                     t("rescued_detached_head", branch=rescued_branch, sha=sha),
@@ -2025,14 +2036,14 @@ class Pipeline:
 
         committed_on: str | None = None
         status = self.git("status", "--porcelain", capture=True, cwd=self.root)
-        if status.strip():
+        if supagit_sweep.has_status_changes(status):
             self._commit_dirty_before_reposition(current, status)
             committed_on = current
             if not self.options.dry_run:
                 status = self.git(
                     "status", "--porcelain", capture=True, cwd=self.root
                 )
-                if status.strip():
+                if supagit_sweep.has_status_changes(status):
                     raise ShipError(
                         t(
                             "error_dirty_reposition",
@@ -2074,7 +2085,7 @@ class Pipeline:
         if not launch_branch or launch_branch in self.branches:
             return None
         status = self.git("status", "--porcelain", capture=True, cwd=self.launch_root)
-        if not status.strip():
+        if not supagit_sweep.has_status_changes(status):
             return None
         self._commit_dirty_before_reposition(launch_branch, status, cwd=self.launch_root)
         if not self.options.dry_run:
@@ -2134,7 +2145,7 @@ class Pipeline:
     ) -> None:
         """Save uncommitted work on the current feature before moving to pipeline[0]."""
         work_cwd = cwd if cwd is not None else self.root
-        status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
+        status_paths = [path for _, path in supagit_sweep.status_entries(status)]
         # Guard once before prompts: exclude secrets, optional .gitignore append.
         safe_paths = list(self._reject_sensitive_paths(status_paths, cwd=work_cwd))
         message = self._commit_message(branch=branch)
@@ -2367,7 +2378,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repaired = bool(
                     getattr(supagit_update.ensure_healthy_source_root, "repaired", False)
                 )
-                if supagit_update.needs_update(source):
+                if supagit_update.source_has_local_changes(source):
+                    print(
+                        "[supagit] Local source changes detected; skipping self-update."
+                    )
+                elif supagit_update.needs_update(source):
                     print("[supagit] Update available; pulling and reinstalling… / Hay actualización…")
                     supagit_update.pull_and_reinstall(
                         source, lang=update_lang, progress=sys.stderr

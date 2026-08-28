@@ -263,6 +263,27 @@ class BranchDiscoveryTests(unittest.TestCase):
             f"{MODULE.RED}error: first line\nerror: second line{MODULE.RESET}",
         )
 
+    def test_situation_probe_suppresses_expected_git_fatal(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "always")
+        pipeline.root = Path("/repo")
+        completed = subprocess.CompletedProcess(
+            args=["git", "rev-parse", "--verify", "MERGE_HEAD"],
+            returncode=128,
+            stdout="",
+            stderr="fatal: Needed a single revision\n",
+        )
+        with patch("subprocess.run", return_value=completed), patch(
+            "builtins.print"
+        ) as mocked_print:
+            with self.assertRaises(MODULE.ShipError):
+                pipeline._situation_git(
+                    "rev-parse", "--verify", "MERGE_HEAD", cwd="/repo"
+                )
+
+        printed = "\n".join(str(call.args[0]) for call in mocked_print.call_args_list)
+        self.assertNotIn("Needed a single revision", printed)
+
 
 class BackendDiscoveryTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -681,6 +702,37 @@ class I18nAndUpdateTests(unittest.TestCase):
                 [(managed, managed / "scripts" / "install-supagit-global.sh", "es")],
             )
             self.assertTrue(update.ensure_healthy_source_root.repaired)
+
+    def test_dirty_marked_source_is_preserved_for_local_development(self) -> None:
+        update = MODULE.supagit_update
+
+        def fake_run(cwd, *args):
+            cmd = list(args)
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "status"]:
+                return " M scripts/supagit.py"
+            raise AssertionError(cmd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            source = home / "working-supagit"
+            scripts = source / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "install-supagit-global.sh").write_text(
+                "#!/bin/sh\n", encoding="utf-8"
+            )
+            marker = home / ".agents" / "skills" / "supagit" / "source-root"
+            marker.parent.mkdir(parents=True)
+            marker.write_text(f"{source}\n", encoding="utf-8")
+            with patch.object(update, "_run", side_effect=fake_run):
+                with patch.object(update, "_source_is_usable", return_value=False):
+                    with patch.object(update, "_shallow_clone_github") as clone:
+                        result = update.ensure_healthy_source_root(home=home)
+
+            self.assertEqual(result, source.resolve())
+            clone.assert_not_called()
+            self.assertFalse(update.ensure_healthy_source_root.repaired)
 
     def test_diverged_source_resets_or_recreates(self) -> None:
         update = MODULE.supagit_update
@@ -1616,6 +1668,31 @@ class CheckoutFlexTests(unittest.TestCase):
 
         self.assertFalse(any(c[0] == "push" for c in calls))
         self.assertTrue(any("behind" in p.lower() for p in printed if isinstance(p, str)))
+
+    def test_commit_and_publish_dry_run_does_not_require_cached_diff(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(
+            dry_run=True,
+            yes=True,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        pipeline.root = Path("/repo")
+        pipeline.dev = "main"
+        pipeline.remote = "origin"
+        calls: list[tuple] = []
+
+        def git(*args, **kwargs):
+            calls.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return " M app.py\n"
+            raise AssertionError(args)
+
+        pipeline.git = git  # type: ignore[method-assign]
+        pipeline.commit_and_publish_dev()
+
+        self.assertFalse(any(call[0] == "add" for call in calls))
 
 
 if __name__ == "__main__":

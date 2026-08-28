@@ -57,6 +57,17 @@ def write_source_root_marker(source_root: Path, home: Path | None = None) -> Non
     marker.write_text(f"{source_root.resolve()}\n", encoding="utf-8")
 
 
+def source_has_local_changes(source_root: Path) -> bool:
+    """Keep an explicitly marked official checkout when it has local work."""
+    if not (source_root / "scripts" / "install-supagit-global.sh").is_file():
+        return False
+    try:
+        assert_github_source(source_root)
+        return bool(_run(source_root, "git", "status", "--porcelain"))
+    except Exception:
+        return False
+
+
 def _run(cwd: Path, *args: str) -> str:
     completed = subprocess.run(
         list(args),
@@ -281,6 +292,8 @@ def ensure_healthy_source_root(
         return existing
 
     managed = managed_source_root(home=base)
+    if existing is not None and existing != managed and source_has_local_changes(existing):
+        return existing
     # Prefer an already-healthy managed tree over destroying it with rmtree+clone.
     if managed.is_dir() and _source_is_usable(managed):
         _progress(t("update_healing_source", path=str(managed)))
@@ -324,6 +337,8 @@ def maybe_self_update_and_reexec(argv: list[str]) -> None:
         return
     lang = resolve_update_lang(argv)
     source = ensure_healthy_source_root(lang=lang)
+    if source_has_local_changes(source):
+        return
     repaired = bool(getattr(ensure_healthy_source_root, "repaired", False))
     if not repaired and not needs_update(source):
         return

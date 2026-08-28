@@ -1172,12 +1172,11 @@ class CommitDirtyTreeTests(unittest.TestCase):
         self.assertIn("app.py", guard_calls[0])
 
         add_calls = [c for c in git_calls if c and c[0] == "add"]
-        self.assertEqual(len(add_calls), 1)
-        add_args = add_calls[0]
-        self.assertNotIn("-A", add_args)
-        self.assertIn("app.py", add_args)
-        self.assertIn(".gitignore", add_args)
-        self.assertNotIn(".env.local", add_args)
+        self.assertEqual(len(add_calls), 2)
+        self.assertTrue(all("-A" not in add_args for add_args in add_calls))
+        self.assertTrue(any("app.py" in add_args for add_args in add_calls))
+        self.assertTrue(any(".gitignore" in add_args for add_args in add_calls))
+        self.assertTrue(all(".env.local" not in add_args for add_args in add_calls))
 
         commit_calls = [c for c in git_calls if c and c[0] == "commit"]
         self.assertEqual(len(commit_calls), 1)
@@ -1196,6 +1195,84 @@ class CommitDirtyTreeTests(unittest.TestCase):
             dry_run=False,
         )
         self.assertFalse(created)
+
+    def test_tracked_change_under_ignored_directory_uses_update(self) -> None:
+        git_calls: list[tuple] = []
+
+        def run_git(*args, cwd=None, capture=True):
+            git_calls.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return " M tests/__pycache__/test.pyc\n?? app.py\n"
+            if args[0] == "add":
+                return ""
+            if args[:3] == ("diff", "--cached", "--name-only"):
+                return "tests/__pycache__/test.pyc\napp.py\n"
+            if args[:3] == ("diff", "--cached", "--check"):
+                return ""
+            if args[0] == "commit":
+                return ""
+            raise AssertionError(f"unexpected git call: {args}")
+
+        created = supagit_sweep.commit_dirty_tree(
+            run_git,
+            cwd=Path("/wt"),
+            message="save work",
+            reject_sensitive=lambda paths, cwd: list(paths),
+            dry_run=False,
+        )
+
+        self.assertTrue(created)
+        self.assertIn(
+            ("add", "-u", "--", "tests/__pycache__/test.pyc"),
+            git_calls,
+        )
+        self.assertIn(("add", "--", "app.py"), git_calls)
+
+    def test_ignored_status_entries_are_not_staged(self) -> None:
+        git_calls: list[tuple] = []
+
+        def run_git(*args, cwd=None, capture=True):
+            git_calls.append(args)
+            if args[:2] == ("status", "--porcelain"):
+                return "!! tests/__pycache__/test.pyc\n M app.py\n"
+            if args[0] == "add":
+                return ""
+            if args[:3] == ("diff", "--cached", "--name-only"):
+                return "app.py\n"
+            if args[:3] == ("diff", "--cached", "--check"):
+                return ""
+            if args[0] == "commit":
+                return ""
+            raise AssertionError(f"unexpected git call: {args}")
+
+        supagit_sweep.commit_dirty_tree(
+            run_git,
+            cwd=Path("/wt"),
+            message="save work",
+            reject_sensitive=lambda paths, cwd: list(paths),
+            dry_run=False,
+        )
+
+        self.assertNotIn(
+            "tests/__pycache__/test.pyc",
+            [argument for call in git_calls for argument in call],
+        )
+
+    def test_only_ignored_status_entries_are_a_noop(self) -> None:
+        def run_git(*args, cwd=None, capture=True):
+            if args[:2] == ("status", "--porcelain"):
+                return "!! tests/__pycache__/test.pyc\n"
+            raise AssertionError(f"ignored-only tree should not run {args}")
+
+        self.assertFalse(
+            supagit_sweep.commit_dirty_tree(
+                run_git,
+                cwd=Path("/wt"),
+                message="save work",
+                reject_sensitive=lambda paths, cwd: list(paths),
+                dry_run=False,
+            )
+        )
 
     def test_prestaged_secret_unstaged_before_commit(self) -> None:
         """Porcelain + pre-staged .env must not land in the commit (novice `git add -A`)."""
@@ -3797,7 +3874,7 @@ class OrchestrationTests(unittest.TestCase):
 
         original_git = pipeline.git
 
-        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None, quiet_errors: bool = False) -> str:
             if args[:2] == ("rev-parse", "--verify") and args[2] in {
                 "MERGE_HEAD",
                 "REBASE_HEAD",
@@ -3839,7 +3916,7 @@ class OrchestrationTests(unittest.TestCase):
         heads = {"MERGE_HEAD"}
         original_git = pipeline.git
 
-        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+        def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None, quiet_errors: bool = False) -> str:
             if args[:2] == ("rev-parse", "--verify") and args[2] in {
                 "MERGE_HEAD",
                 "REBASE_HEAD",
@@ -3884,7 +3961,7 @@ class OrchestrationTests(unittest.TestCase):
             rebase_merge = Path(td) / "rebase-merge"
             rebase_merge.mkdir()
 
-            def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None) -> str:
+            def git(*args: str, capture: bool = False, check: bool = True, mutating: bool = False, cwd: Path | None = None, quiet_errors: bool = False) -> str:
                 if args[:2] == ("rev-parse", "--git-path") and args[2] == "rebase-merge":
                     return f"{rebase_merge}\n"
                 if args[:2] == ("rev-parse", "--git-path") and args[2] == "rebase-apply":

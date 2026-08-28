@@ -34,6 +34,48 @@ PROMOTE_PR_BODY = "Promoted by supagit."
 _PR_URL_NUMBER = re.compile(r"/pull/(\d+)\b")
 
 
+def status_entries(status: str) -> list[tuple[str, str]]:
+    """Return porcelain status codes and paths, excluding ignored entries."""
+    return [
+        (line[:2], line[3:])
+        for line in status.splitlines()
+        if len(line) >= 4 and line[:2] != "!!"
+    ]
+
+
+def has_status_changes(status: str) -> bool:
+    return bool(status_entries(status))
+
+
+def stage_safe_paths(
+    run_git: GitRunner,
+    *,
+    status: str,
+    safe_paths: Sequence[str],
+    cwd: Path,
+) -> None:
+    """Stage tracked changes with ``-u`` so ignored parents cannot reject them."""
+    safe = {path for path in safe_paths if path}
+    tracked: list[str] = []
+    untracked: list[str] = []
+    status_paths = {path for _, path in status_entries(status)}
+
+    for code, path in status_entries(status):
+        if path not in safe:
+            continue
+        if code == "??":
+            untracked.append(path)
+        else:
+            tracked.append(path)
+
+    # The sensitive-path guard may add a new .gitignore path not present in status.
+    untracked.extend(path for path in safe_paths if path not in status_paths)
+    if tracked:
+        run_git("add", "-u", "--", *tracked, cwd=cwd)
+    if untracked:
+        run_git("add", "--", *untracked, cwd=cwd)
+
+
 def pr_number_from_create_output(output: str) -> int | None:
     """Parse the PR number from `gh pr create` stdout (PR URL)."""
     match = _PR_URL_NUMBER.search(output or "")
@@ -697,10 +739,10 @@ def commit_dirty_tree(
     is_sensitive: IsSensitive | None = None,
 ) -> bool:
     status = run_git("status", "--porcelain", cwd=cwd)
-    if not status.strip():
+    status_paths = [path for _, path in status_entries(status)]
+    if not status_paths:
         return False
 
-    status_paths = [line[3:] for line in status.splitlines() if len(line) >= 4]
     safe_paths = [path for path in reject_sensitive(status_paths, cwd) if path]
     if not safe_paths:
         raise SweepError(t("error_only_secrets_remaining"))
@@ -711,7 +753,12 @@ def commit_dirty_tree(
     safe_set = set(safe_paths)
     sense = is_sensitive or (lambda path: path not in safe_set)
 
-    run_git("add", "--", *safe_paths, cwd=cwd)
+    stage_safe_paths(
+        run_git,
+        status=status,
+        safe_paths=safe_paths,
+        cwd=cwd,
+    )
     staged = run_git("diff", "--cached", "--name-only", cwd=cwd)
     staged_paths = [path for path in staged.splitlines() if path]
     leaked = [path for path in staged_paths if sense(path)]
@@ -1078,7 +1125,7 @@ def integrate_branch(
     gh.ensure_github_remote(remote_url)
 
     status = run_git("status", "--porcelain", cwd=cwd)
-    if status.strip():
+    if has_status_changes(status):
         message = message_provider()
         commit_dirty_tree(
             run_git,
