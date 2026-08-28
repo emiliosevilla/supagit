@@ -41,7 +41,6 @@ GREEN = "\033[32m"
 RED = "\033[31m"
 CYAN = "\033[36m"
 RESET = "\033[0m"
-COMMAND_TIMEOUT_S = 30
 
 
 def _git_command_is_mutating(args: Sequence[str]) -> bool:
@@ -744,19 +743,13 @@ class Pipeline:
             and sys.stderr.isatty()
         )
         with BusySpinner(enabled=spinner_enabled):
-            try:
-                completed = subprocess.run(
-                    [str(part) for part in command],
-                    cwd=str(cwd or getattr(self, "root", Path.cwd())),
-                    text=True,
-                    stdout=subprocess.PIPE if capture else None,
-                    stderr=subprocess.PIPE,
-                    timeout=COMMAND_TIMEOUT_S,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise ShipError(
-                    f"Command timed out after {COMMAND_TIMEOUT_S}s: {rendered}"
-                ) from exc
+            completed = subprocess.run(
+                [str(part) for part in command],
+                cwd=str(cwd or getattr(self, "root", Path.cwd())),
+                text=True,
+                stdout=subprocess.PIPE if capture else None,
+                stderr=subprocess.PIPE,
+            )
         if capture and completed.stdout:
             print(completed.stdout, end="")
         if completed.returncode != 0 and check:

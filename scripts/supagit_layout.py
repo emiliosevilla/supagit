@@ -9,8 +9,6 @@ from pathlib import Path
 
 from supagit_busy import BusySpinner
 
-COMMAND_TIMEOUT_S = 30
-
 
 class LayoutError(RuntimeError):
     pass
@@ -33,19 +31,13 @@ def _git(cwd: Path, *args: str, spinner_enabled: bool | None = None) -> str:
             and os.environ.get("TERM") != "dumb"
         )
     with BusySpinner(enabled=spinner_enabled):
-        try:
-            completed = subprocess.run(
-                ["git", *args],
-                cwd=str(cwd),
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=COMMAND_TIMEOUT_S,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise LayoutError(
-                f"git {' '.join(args)} timed out after {COMMAND_TIMEOUT_S}s"
-            ) from exc
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
     if completed.returncode != 0:
         details = completed.stderr.strip() or "git failed"
         raise LayoutError(details)
