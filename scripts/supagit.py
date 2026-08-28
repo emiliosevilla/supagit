@@ -2392,9 +2392,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                     )
                     source_dirty = supagit_update.source_has_local_changes(source)
-                    update_available = not source_dirty and supagit_update.needs_update(
-                        source
-                    )
+                    source_update = not source_dirty and supagit_update.needs_update(source)
+                    installed_stale = not source_dirty and supagit_update.installed_copy_is_stale(source)
+                    update_available = source_update or installed_stale
                 if source_dirty:
                     print(
                         "[supagit] Local source changes detected; skipping self-update."
@@ -2402,9 +2402,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 elif update_available:
                     print("[supagit] Update available; pulling and reinstalling… / Hay actualización…")
                     with BusySpinner(enabled=spinner_enabled):
-                        supagit_update.pull_and_reinstall(
-                            source, lang=update_lang, progress=sys.stderr
-                        )
+                        if source_update:
+                            supagit_update.pull_and_reinstall(
+                                source, lang=update_lang, progress=sys.stderr
+                            )
+                        else:
+                            supagit_update.reinstall_from_source(
+                                source, lang=update_lang, progress=sys.stderr
+                            )
                     repaired = True
                 if repaired:
                     print("[supagit] Update installed; restarting… / Actualización instalada; reiniciando…")
@@ -2413,7 +2418,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     script = Path(__file__).resolve()
                     os.execve(sys.executable, [sys.executable, str(script), *raw_argv], env)
                 else:
-                    print("[supagit] Already on the latest supagit (origin/main). [build: 2026-08-12]")
+                    print(
+                        "[supagit] Already on the latest supagit (origin/main). "
+                        f"[build: {supagit_update.build_stamp(source)}]"
+                    )
         except ShipError:
             raise
         except supagit_update.UpdateError as exc:

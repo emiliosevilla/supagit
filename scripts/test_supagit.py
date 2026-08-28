@@ -602,6 +602,26 @@ class I18nAndUpdateTests(unittest.TestCase):
         with patch.object(update, "_run", side_effect=fake_run):
             self.assertFalse(update.needs_update(Path("/tmp")))
 
+    def test_installed_copy_is_stale_when_global_file_differs(self) -> None:
+        update = MODULE.supagit_update
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            source = home / "source"
+            scripts = source / "scripts"
+            installed = home / ".agents" / "skills" / "supagit"
+            scripts.mkdir(parents=True)
+            installed.mkdir(parents=True)
+            for name in update.INSTALLED_FILES:
+                (scripts / name).write_text(f"source:{name}\n", encoding="utf-8")
+                (installed / name).write_text(f"source:{name}\n", encoding="utf-8")
+            (source / "docs").mkdir()
+            (source / "docs" / "supagit-agent-command.md").write_text("skill\n", encoding="utf-8")
+            (installed / "SKILL.md").write_text("skill\n", encoding="utf-8")
+
+            self.assertFalse(update.installed_copy_is_stale(source, home=home))
+            (installed / "supagit_update.py").write_text("old\n", encoding="utf-8")
+            self.assertTrue(update.installed_copy_is_stale(source, home=home))
+
     def test_needs_update_false_when_ahead_only(self) -> None:
         update = MODULE.supagit_update
 
@@ -1384,6 +1404,31 @@ class WelcomeAndBusyTests(unittest.TestCase):
         self.assertIs(kwargs.get("progress"), MODULE.sys.stderr)
         execve.assert_called_once()
         self.assertEqual(spinner.call_count, 2)
+
+    def test_main_refreshes_stale_install_even_when_source_is_current(self) -> None:
+        source = Path("/tmp/supagit-source")
+        with patch.object(MODULE, "needs_skip_update", return_value=False):
+            with patch.object(
+                MODULE.supagit_update,
+                "ensure_healthy_source_root",
+                return_value=source,
+            ) as ensure:
+                ensure.repaired = False
+                with patch.object(MODULE.supagit_update, "needs_update", return_value=False):
+                    with patch.object(
+                        MODULE.supagit_update,
+                        "installed_copy_is_stale",
+                        return_value=True,
+                    ):
+                        with patch.object(MODULE.supagit_update, "reinstall_from_source") as reinstall:
+                            with patch("os.execve", side_effect=SystemExit(0)) as execve:
+                                with patch.object(MODULE, "BusySpinner"):
+                                    with patch("builtins.print"):
+                                        with self.assertRaises(SystemExit):
+                                            MODULE.main(["--lang", "en", "--yes", "--no-sweep"])
+        ensure.assert_called_once()
+        reinstall.assert_called_once()
+        execve.assert_called_once()
 
 
 class CheckoutFlexTests(unittest.TestCase):

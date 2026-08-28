@@ -1,7 +1,54 @@
 # supagit
 
-`supagit` is a fail-closed promotion pipeline for projects that publish code
-through an ordered sequence of Git branches. A Supabase backend is optional.
+> A cautious Git release sweeper for moving work from development to
+> production.
+
+`supagit` is a small command-line tool for teams that publish through ordered
+Git branches such as `dev → staging → production`. It shows the plan, asks for
+confirmation, and stops when the repository is dirty, histories have diverged,
+or a deployment target is ambiguous. A Supabase backend is optional.
+
+It is built for the moment before a release: several branches, a few pull
+requests, possibly database migrations, and a strong preference for knowing
+exactly what will happen before anything is changed.
+
+## Why supagit
+
+- **Preview first.** `supagit --dry-run` measures the repository and prints the
+  proposed work before the release run.
+- **Branch-aware.** Configure an ordered pipeline or let `supagit` detect the
+  usual `dev`, `pre`, and `prod` branches.
+- **Pull-request friendly.** Feature integration and protected promotions use
+  GitHub pull requests; direct pushes are used only when the destination
+  allows them.
+- **Database-aware when needed.** Supabase migrations run for the configured
+  destination before the code that depends on them. Projects without a
+  database can use `provider: none`.
+- **Fail-closed.** It does not stash work, force-push, guess between database
+  projects, or reset a dirty worktree.
+- **Terminal-sized.** One command, English or Spanish prompts, and a busy
+  spinner for long-running checks and updates.
+
+## Quick start
+
+Install the global command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
+```
+
+Then run it from the repository you want to publish:
+
+```bash
+cd path/to/your-project
+supagit init --backend none
+supagit --dry-run
+supagit
+```
+
+For a Supabase project, replace `none` with `supabase`. If the project already
+has `.supagit.json`, skip `init`. The first run explains the detected branches,
+shows the release plan, and waits for confirmation before making changes.
 
 The CLI, installer, and tests live in [`scripts/`](scripts/). Project config
 template: [`.supagit.json.example`](.supagit.json.example).
@@ -60,8 +107,9 @@ also removes any previous generated launcher and skill files so there is one
 command name only.
 
 After the first installation, running `supagit` checks the registered source
-against the global copy and updates the skill automatically when it is stale.
-At startup it also compares the source-root clone to `origin/main` on GitHub
+against the global copy and reinstalls the skill automatically when it is
+stale, even if the source clone itself is already current. At startup it also
+compares the source-root clone to `origin/main` on GitHub
 (`emiliosevilla/supagit`). If **behind only**, it fast-forward pulls, reinstalls,
 and re-executes. If the source clone has **diverged** from `origin/main`, the
 run stops with recovery commands (it does not force a pull). Set

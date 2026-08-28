@@ -23,9 +23,22 @@ DEFAULT_REMOTE = "origin"
 DEFAULT_BRANCH = "main"
 GITHUB_MARKER = "github.com/emiliosevilla/supagit"
 GITHUB_CLONE_URL = "https://github.com/emiliosevilla/supagit.git"
-# Visible on every reinstall so users can confirm freshness.
-BUILD_STAMP = "2026-08-12"
+# Fallback shown only when the source commit cannot be read.
+BUILD_STAMP = "unknown"
 UPDATE_COMMAND_TIMEOUT_S = 20
+INSTALLED_FILES = (
+    "supagit.py",
+    "supagit_layout.py",
+    "supagit_inventory.py",
+    "supagit_menu.py",
+    "supagit_sweep.py",
+    "supagit_i18n.py",
+    "supagit_update.py",
+    "supagit_busy.py",
+    "supagit_situation.py",
+    "supagit_supabase.py",
+    "supagit",
+)
 
 
 def source_root_from_marker(home: Path | None = None) -> Path | None:
@@ -87,6 +100,40 @@ def _run(cwd: Path, *args: str) -> str:
         detail = (completed.stderr or completed.stdout or "command failed").strip()
         raise UpdateError(f"{' '.join(args)}: {detail}")
     return completed.stdout.strip()
+
+
+def build_stamp(source_root: Path) -> str:
+    """Return the source commit date and short id shown to the user."""
+    try:
+        return _run(source_root, "git", "show", "-s", "--format=%cs %h", "HEAD")
+    except UpdateError:
+        return BUILD_STAMP
+
+
+def installed_copy_is_stale(source_root: Path, home: Path | None = None) -> bool:
+    """Detect an incomplete or stale global skill installation."""
+    base = home or Path.home()
+    installed = base / ".agents" / "skills" / "supagit"
+    for name in INSTALLED_FILES:
+        source_file = source_root / "scripts" / name
+        installed_file = installed / name
+        try:
+            if not source_file.is_file() or not installed_file.is_file():
+                return True
+            if source_file.read_bytes() != installed_file.read_bytes():
+                return True
+        except OSError:
+            return True
+    skill_source = source_root / "docs" / "supagit-agent-command.md"
+    skill_target = installed / "SKILL.md"
+    try:
+        return (
+            not skill_source.is_file()
+            or not skill_target.is_file()
+            or skill_source.read_bytes() != skill_target.read_bytes()
+        )
+    except OSError:
+        return True
 
 
 def resolve_update_lang(argv: list[str] | None = None) -> str:
@@ -228,7 +275,24 @@ def pull_and_reinstall(
         raise UpdateError(t("update_installer_missing", path=str(installer)))
     _progress(f"[supagit] install-supagit-global.sh --lang {lang}…")
     _run_installer(source_root, installer, lang)
-    _progress(t("update_reinstalled", build=BUILD_STAMP))
+    _progress(t("update_reinstalled", build=build_stamp(source_root)))
+
+
+def reinstall_from_source(
+    source_root: Path, *, lang: str = "en", progress: TextIO | None = None
+) -> None:
+    """Refresh the global copy when the source clone is already current."""
+    def _progress(message: str) -> None:
+        if progress is not None:
+            print(message, file=progress, flush=True)
+
+    assert_github_source(source_root)
+    installer = source_root / "scripts" / "install-supagit-global.sh"
+    if not installer.is_file():
+        raise UpdateError(t("update_installer_missing", path=str(installer)))
+    _progress(f"[supagit] install-supagit-global.sh --lang {lang}…")
+    _run_installer(source_root, installer, lang)
+    _progress(t("update_reinstalled", build=build_stamp(source_root)))
 
 
 def _shallow_clone_github(dest: Path) -> None:
@@ -323,7 +387,7 @@ def ensure_healthy_source_root(
                 raise UpdateError(t("update_installer_missing", path=str(installer)))
             _progress(t("update_healing_reinstall", lang=lang))
             _run_installer(managed, installer, lang)
-            _progress(t("update_reinstalled", build=BUILD_STAMP))
+            _progress(t("update_reinstalled", build=build_stamp(managed)))
         ensure_healthy_source_root.repaired = True
         return managed
 
@@ -342,7 +406,7 @@ def ensure_healthy_source_root(
             raise UpdateError(t("update_installer_missing", path=str(installer)))
         _progress(t("update_healing_reinstall", lang=lang))
         _run_installer(managed, installer, lang)
-        _progress(t("update_reinstalled", build=BUILD_STAMP))
+        _progress(t("update_reinstalled", build=build_stamp(managed)))
     ensure_healthy_source_root.repaired = True
     return managed
 
@@ -359,10 +423,14 @@ def maybe_self_update_and_reexec(argv: list[str]) -> None:
     if source_has_local_changes(source):
         return
     repaired = bool(getattr(ensure_healthy_source_root, "repaired", False))
-    if not repaired and not needs_update(source):
+    source_update = needs_update(source)
+    installed_stale = installed_copy_is_stale(source)
+    if not repaired and not source_update and not installed_stale:
         return
-    if needs_update(source):
+    if source_update:
         pull_and_reinstall(source, lang=lang)
+    elif installed_stale:
+        reinstall_from_source(source, lang=lang)
     env = os.environ.copy()
     env[SKIP_ENV] = "1"
     script = Path(__file__).resolve().parent / "supagit.py"

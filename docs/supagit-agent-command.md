@@ -37,12 +37,13 @@ non-TTY). You may also run `supagit init --backend none` or
 existing configuration.
 
 At process start, `supagit` checks the registered GitHub source-root against
-`origin/main`. If **behind only**, it pulls ff-only, reinstalls the global
-skill, and re-executes. If the source clone has **diverged**, the run fails
-closed with recovery commands (no forced pull). Fail-closed if a behind-only
-update cannot complete. The global launcher also refreshes stale installed
-files from the registered source. Set `SUPAGIT_SKIP_UPDATE=1` to skip the
-GitHub tip check once.
+`origin/main` and verifies that the installed global files match it. If the
+source is **behind only**, it pulls ff-only, reinstalls the global skill, and
+re-executes. If the source is current but the global copy is stale or
+incomplete, it reinstalls from that source and re-executes. If the source clone
+has **diverged**, the run fails closed with recovery commands (no forced pull).
+Fail-closed if a behind-only update cannot complete. Set
+`SUPAGIT_SKIP_UPDATE=1` to skip the GitHub tip check once.
 
 Choose UI language with the startup menu, `--lang en|es`, or `SUPAGIT_LANG`.
 With `--yes` / non-TTY, `--lang` or `SUPAGIT_LANG` is required. Confirmations
