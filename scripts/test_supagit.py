@@ -1483,7 +1483,7 @@ class CheckoutFlexTests(unittest.TestCase):
     def test_resolve_layout_not_git_repo(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
 
-        def boom(cwd=None):
+        def boom(cwd=None, **_kwargs):
             raise MODULE.supagit_layout.LayoutError(
                 "fatal: not a git repository (or any of the parent directories): .git"
             )
@@ -1497,7 +1497,7 @@ class CheckoutFlexTests(unittest.TestCase):
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
         detail = "Unsupported git common dir layout: /bare.git"
 
-        def boom(cwd=None):
+        def boom(cwd=None, **_kwargs):
             raise MODULE.supagit_layout.LayoutError(detail)
 
         with patch.object(MODULE.supagit_layout, "resolve_repo_layout", side_effect=boom):

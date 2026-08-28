@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from typing import Callable, Sequence
 from unittest.mock import patch
+from types import SimpleNamespace
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
@@ -29,6 +30,21 @@ def _run(cwd: Path, *args: str) -> str:
 
 
 class RepoLayoutTests(unittest.TestCase):
+    def test_layout_git_uses_spinner_when_enabled(self) -> None:
+        outputs = iter(("/repo\n", ".git\n", ".git\n"))
+
+        def fake_run(*_args, **_kwargs):
+            return SimpleNamespace(returncode=0, stdout=next(outputs), stderr="")
+
+        with patch.object(supagit_layout.subprocess, "run", side_effect=fake_run):
+            with patch.object(supagit_layout, "BusySpinner") as spinner:
+                layout = supagit_layout.resolve_repo_layout(
+                    Path("/repo"), spinner_enabled=True
+                )
+
+        self.assertEqual(layout.main_root, Path("/repo"))
+        self.assertEqual(spinner.call_count, 3)
+
     def test_main_checkout_is_not_linked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

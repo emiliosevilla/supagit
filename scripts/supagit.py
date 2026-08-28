@@ -323,7 +323,9 @@ class Pipeline:
 
     def _resolve_layout(self) -> supagit_layout.RepoLayout:
         try:
-            return supagit_layout.resolve_repo_layout()
+            return supagit_layout.resolve_repo_layout(
+                spinner_enabled=colour_enabled(self.options.color, sys.stderr)
+            )
         except supagit_layout.LayoutError as exc:
             message = str(exc)
             if "not a git repository" in message.lower():
