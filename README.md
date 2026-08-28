@@ -1,374 +1,92 @@
 # supagit
 
-> A cautious Git release sweeper for moving work from development to
-> production.
+> Un lanzamiento completo de Git, escrito con una sola palabra.
 
-`supagit` is a small command-line tool for teams that publish through ordered
-Git branches such as `dev → staging → production`. It shows the plan, asks for
-confirmation, and stops when the repository is dirty, histories have diverged,
-or a deployment target is ambiguous. A Supabase backend is optional.
+Los agentes de IA pierden tiempo y tokens escribiendo, explicando y repitiendo
+operaciones de Git: comprobar el estado, cambiar de rama, integrar cambios,
+hacer `push`, abrir pull requests y comprobar si todo terminó bien.
 
-It is built for the moment before a release: several branches, a few pull
-requests, possibly database migrations, and a strong preference for knowing
-exactly what will happen before anything is changed.
-
-## Why supagit
-
-- **Preview first.** `supagit --dry-run` measures the repository and prints the
-  proposed work before the release run.
-- **Branch-aware.** Configure an ordered pipeline or let `supagit` detect the
-  usual `dev`, `pre`, and `prod` branches.
-- **Pull-request friendly.** Feature integration and protected promotions use
-  GitHub pull requests; direct pushes are used only when the destination
-  allows them.
-- **Database-aware when needed.** Supabase migrations run for the configured
-  destination before the code that depends on them. Projects without a
-  database can use `provider: none`.
-- **Fail-closed.** It does not stash work, force-push, guess between database
-  projects, or reset a dirty worktree.
-- **Terminal-sized.** One command, English or Spanish prompts, and a busy
-  spinner for long-running checks and updates.
-
-## Quick start
-
-Install the global command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
-```
-
-Then run it from the repository you want to publish:
-
-```bash
-cd path/to/your-project
-supagit init --backend none
-supagit --dry-run
-supagit
-```
-
-For a Supabase project, replace `none` with `supabase`. If the project already
-has `.supagit.json`, skip `init`. The first run explains the detected branches,
-shows the release plan, and waits for confirmation before making changes.
-
-The CLI, installer, and tests live in [`scripts/`](scripts/). Project config
-template: [`.supagit.json.example`](.supagit.json.example).
-
-| Doc | Purpose |
-|-----|---------|
-| [`docs/supagit-agent-command.md`](docs/supagit-agent-command.md) | Agent skill / how to run `supagit` safely |
-| [`tasks/task.md`](tasks/task.md) | Open and recently finished work |
-| [`docs/superpowers/backlog/2026-08-11-supabase-hardening.md`](docs/superpowers/backlog/2026-08-11-supabase-hardening.md) | Deferred Supabase recovery backlog |
-
-## Installation
-
-Preferred: the one-liner. You may run it from **any directory** — including
-outside a Git repository. It only installs the global `supagit` command (clone
-under `~/.local/share/supagit` + `~/.local/bin`). Forking is only for proposing
-changes — install from `emiliosevilla/supagit` so auto-updates keep working.
-
-### Option A — one-liner (`curl`) — recommended
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
-```
-
-Spanish UI during install:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh -s -- --lang es
-```
-
-Optional overrides: `SUPAGIT_REPO_URL`, `SUPAGIT_SOURCE_DIR`, `SUPAGIT_BRANCH`.
-
-After install, ensure `~/.local/bin` is on your `PATH`, then open a terminal
-**inside the project you want to publish** (a Git repo with a remote) and run
-`supagit`. If that project has no `.supagit.json`, `supagit` helps you create
-one. Merging independent work via pull requests requires the GitHub CLI (`gh`)
-to be installed and authenticated.
-
-### Option B — clone, then install
-
-```bash
-git clone https://github.com/emiliosevilla/supagit.git
-cd supagit
-./scripts/install-supagit-global.sh --lang es
-```
-
-If you already develop inside a clone of this repo, install from that checkout
-the same way (`./scripts/install-supagit-global.sh`).
-
-On a TTY the installer asks for language (`(1) English` / `(2) Español`).
-Skip the menu with `--lang en|es` or `SUPAGIT_LANG`. Non-TTY defaults to English.
-Auto-updates from the global launcher pass `--lang` so they never prompt mid-run.
-
-The installer updates `~/.local/bin/supagit` and the local skill/command copies.
-It records the source clone path and does not alter a project repository. It
-also removes any previous generated launcher and skill files so there is one
-command name only.
-
-After the first installation, running `supagit` checks the registered source
-against the global copy and reinstalls the skill automatically when it is
-stale, even if the source clone itself is already current. At startup it also
-compares the source-root clone to `origin/main` on GitHub
-(`emiliosevilla/supagit`). If **behind only**, it fast-forward pulls, reinstalls,
-and re-executes. If the source clone has **diverged** from `origin/main`, the
-run stops with recovery commands (it does not force a pull). Set
-`SUPAGIT_SKIP_UPDATE=1` to skip that check (tests / one-shot re-exec). If the
-source repository has moved, run the installer again from its new path (or
-re-run the bootstrap one-liner).
-
-## Configuration
-
-Create `.supagit.json` in the project root, starting from
-`.supagit.json.example`. The legacy `branches` object supports automatic
-detection of `dev`, `pre`, and `prod`. For any other number of stages, use an
-ordered list; each name must exist on the remote:
-
-```json
-"branches": ["main"]
-```
-
-or:
-
-```json
-"branches": ["dev", "qa", "staging", "production"]
-```
-
-The list is processed from left to right. One branch runs checks and publishes
-that branch without merges; multiple branches create one promotion per adjacent
-pair. Missing or duplicate branches stop the pipeline.
-
-The backend is independent from the branch pipeline and is **optional**.
-
-Installing `supagit` (the global CLI) does **not** connect to Supabase, does
-**not** upload your credentials, and does **not** grant the tool author access
-to your projects. Database steps only run when **your** project’s
-`.supagit.json` sets `"backend": { "provider": "supabase" }` and you already
-have the Supabase CLI logged in on **your** machine. Project refs come from
-**your** environment (or local `.env*` files); prefer naming env vars instead
-of putting refs in the committed JSON:
-
-```json
-"backend": {
-  "provider": "supabase",
-  "auto_detect": true,
-  "environments": {
-    "pre": { "project_ref_env": "SUPABASE_PRE_PROJECT_REF" },
-    "prod": { "project_ref_env": "SUPABASE_PROD_PROJECT_REF" }
-  }
-}
-```
-
-Each environment must resolve to exactly one Supabase project. Resolution can
-use `project_ref`, `project_ref_env`, `url_env`, role-specific environment
-variables, or files such as `.env.staging` and `.env.production`. Missing or
-ambiguous targets stop the pipeline; project IDs are never guessed.
-
-If the project has no database migrations in this pipeline (frontend-only or
-you will migrate elsewhere), use:
-
-```json
-{"backend": {"provider": "none"}}
-```
-
-This skips database checkpoints while retaining checks and code promotion. The
-previous `supabase.pruebas_project_ref` and `supabase.prod_project_ref` fields
-remain supported for compatibility. Providers other than `supabase` and `none`
-are not implemented yet.
-
-## Initialize a project
-
-From the target project repository, create its local ignored configuration with:
-
-```bash
-supagit init --backend none
-```
-
-For a Supabase project, use:
-
-```bash
-supagit init --backend supabase
-```
-
-If `.supagit.json` is missing when you run the pipeline, `supagit` auto-creates
-it (prompts for backend on a TTY; with `--yes` / non-TTY require `--backend`).
-The initializer refuses to overwrite an existing `.supagit.json`. It writes
-only backend/branch configuration; it does not install the global command or
-store Supabase IDs.
-
-Pass ordered branches when the project does not use the legacy three-stage
-layout, for example `supagit init --backend none --branches main`.
-
-## Running
-
-Just run `supagit` from the folder you are in. **Do not** switch branches
-first and **do not** copy placeholder text such as `<rama-feature>` into the
-shell (zsh treats `<…>` as file redirection and fails).
-
-You may run from the main repository or from a linked worktree, and from
-**any** branch (feature, pipeline, or a detached HEAD with a reachable
-commit). When a move to the first pipeline branch is required, uncommitted
-changes on a named feature branch are committed there first; a dirty detached
-HEAD still fails closed. When launched from a linked worktree, promotion uses
-the main checkout; the launch path is printed at startup.
-
-At startup, `supagit` tells you which branch you are on and that you should
-not change it yourself. After the sweeper menu and Situation preflight, the
-cyan execution plan is confirmed (green). Then, if the checkout is on another
-branch with uncommitted changes, those changes are committed on that branch
-first (message prompt, or `-m` with `--yes`). After that it moves the checkout
-to the first pipeline branch when needed (cyan explain + green confirm). A
-dirty detached HEAD, or a commit blocked by secrets, still stops the run with
-an actionable message — it never stashes, force-checks out, or discards your
-work. Local changes already on the first pipeline branch are published in the
-publish phase. When the release finishes, interactive runs offer to return you
-to the branch you started on.
-
-Always inspect the plan first:
-
-```bash
-supagit --dry-run
-```
-
-Then run the confirmed pipeline:
+`supagit` concentra ese trabajo en un comando de Terminal. Escribes:
 
 ```bash
 supagit
 ```
 
-### Sweeper (default)
+El programa muestra qué va a hacer, pide confirmación y presenta el resultado
+con claridad. Así el agente puede dedicar su contexto a resolver el problema,
+no a narrar cada paso de Git.
 
-Unless `--no-sweep` is passed, an interactive menu selects for **this run
-only** (not persisted). The menu and execution plan are printed in **cyan**
-(tutor context). After the welcome banner and after cyan blocks that are **not**
-immediately followed by a green decision prompt, `supagit` asks a green
-**Continue?** / **¿Continuar?** (`[Y/n]` / `[S/n]`; Enter = yes). When cyan is
-paired with a green answer field (`tutor_prompt` / `tutor_confirm`), that field
-is the only gate — no extra Continue?. Under `--dry-run`, routine Continues are
-skipped so the preview can reach the plan without extra gates; only the
-numbered **execution plan** still asks for confirmation. User answers to
-questions (commit message, branch picks, etc.) are also **green** prompts.
+## Qué aporta
 
-The menu has two labeled blocks:
+- Menos comandos repetidos y menos tokens consumidos por cada lanzamiento.
+- Un plan visible antes de modificar el proyecto.
+- Mensajes claros cuando algo falla, cambia de forma inesperada o termina bien.
+- Flujo guiado para integrar trabajo y promoverlo entre ramas.
+- Pull requests cuando GitHub las exige.
+- Migraciones de Supabase, sólo si el proyecto las configura.
+- Interfaz en inglés o español.
 
-- **Feature branches** — linked worktrees and other local features. Numbered
-  `1.`, `2.`, … with `[✓]`. Enter merges pending `[✓]` branches; type numbers
-  (e.g. `1,3`) or `0` to skip. Already-in-base stays `[✓]` with a short note
-  but Enter does not open a new PR. If there are none, the prompt is skipped.
-- **Release pipeline** — promotion order for this run. Own numbers `1.`, `2.`, …
-  (order matters). Enter keeps the configured default, or type numbers/names
-  to reorder. If only one pipeline branch exists, that prompt is skipped.
+`supagit` trabaja con cuidado: no fuerza pushes, no borra cambios sin permiso y
+se detiene ante estados ambiguos. Su objetivo no es ocultar Git, sino convertir
+un proceso largo y repetitivo en una acción visible y controlable.
 
-Green prompts appear only when there is something to choose. Then `supagit`
-measures a **Situation** report (cyan preflight: sync findings and proposed
-cures such as publish-then-ff or feature fast-forward). Blocked cases
-(diverged histories, dirty feature behind upstream, empty PR) stop with
-actionable commands. Then a numbered **execution plan** is printed in cyan
-(including those cures), followed by a green confirmation
-(`[Y/n]` / `[S/n]`; Enter = yes).
+## Empezar
 
-Selected features are integrated through GitHub pull requests merged into the
-first pipeline branch. The `gh` CLI must be installed and authenticated. Dirty
-feature worktrees are committed and pushed first. Clean feature branches that
-still exist on the remote and are behind their upstream are fast-forwarded in
-the correct worktree (or via ref update without checking them out onto
-`pipeline[0]`) before opening a PR. If the remote feature branch was deleted
-(common after a merged PR), integrate skips that ff and pushes the local branch
-to recreate it. Empty `base..head` ranges are refused before `gh pr create`.
-Feature integrates merge with `gh pr merge --merge --admin` so protected
-`pipeline[0]` rules do not block the sweeper; promotion PRs also use `--admin`.
+Instala el comando global:
 
-Phase order after plan Confirm:
+```bash
+curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
+```
 
-1. If the current branch is not the first pipeline branch and has uncommitted
-   changes, **commit** them on that branch (then the tree is clean enough to move).
-   If that commit leaves the feature ahead of `pipeline[0]`, the run **adds it to
-   integrate** even if the menu had skipped it as already contained.
-2. Ensure checkout on the first pipeline branch.
-3. **Publish** local changes on that branch (commit/push when needed). A clean
-   tree that is only behind defers sync to the ff step.
-4. **Integrate** selected features (with feature ff when the remote branch exists;
-   rebase onto `pipeline[0]` when it moved ahead; refuse merge when GitHub reports
-   conflicts). Do not commit dirty changes on `pipeline[0]` while features are
-   scheduled to integrate — that causes PR conflicts.
-5. **Fast-forward** the first pipeline branch to its remote (ff-only; refused
-   while the worktree is dirty; never `reset --hard` on a dirty tree).
-6. Checks, optional migrations, promote adjacent pairs, optional cleanup.
+Entra en el proyecto que quieres publicar y prueba primero el plan:
 
-### Promotion
+```bash
+cd ruta/de/tu-proyecto
+supagit --dry-run
+```
 
-The pipeline runs checks, migrates the backend configured for each destination
-branch when present, promotes each adjacent branch pair, and returns to the
-first pipeline branch. (Local publish on the first branch already ran before
-feature integrate / ff, as above.)
+Cuando el plan sea correcto:
 
-For each promotion into a destination branch, `supagit` asks GitHub (via `gh`)
-whether that branch is protected by an active **ruleset** or classic branch
-protection that **requires a pull request**:
+```bash
+supagit
+```
 
-- **Protected (PR required)** — opens or reuses a PR `source → target` and
-  merges it with `gh pr merge --merge --admin` so branch rules do not block the
-  release. If `--admin` is unavailable (permissions/auth), the run stops with
-  instructions to check `gh auth`.
-- **Unprotected / direct push allowed** — local `git merge` + `git push` as
-  before.
-- **Non-GitHub remotes** — always the direct merge+push path.
+Si el proyecto aún no tiene configuración, puedes crearla con:
 
-Public vs private visibility is reported in the cyan tutor text; it does not
-by itself change the mode (only branch rules do).
+```bash
+supagit init --backend none
+```
 
-### Flags
+Para un proyecto con migraciones de Supabase, usa `--backend supabase`.
 
-| Flag | Effect |
-|------|--------|
-| `--dry-run` | Preview the plan without mutating Git or Supabase. Skips routine Continue? gates; still confirms at the execution plan. |
-| `--lang en\|es` | UI language (skips the language menu). Also `SUPAGIT_LANG`. Required with `--yes` / non-TTY. |
-| `--backend` | Backend for `init` or auto-init when `.supagit.json` is missing (`none` / `supabase`). |
-| `--no-sweep` | Skip menu and feature integration; still runs Situation preflight for the first pipeline branch, commits dirty work on the current feature when a move is needed, explains and relocates the checkout, publishes when appropriate, and ff-only syncs that branch. |
-| `--integrate` | Comma-separated feature branches, or `none` (non-interactive). |
-| `--pipeline` | Comma-separated ordered pipeline branches (non-interactive). |
-| `--yes` | Skip confirmations; requires `--integrate` and `--pipeline` unless `--no-sweep`. |
-| `--cleanup` | Apply optional post-run cleanup without prompting (use with `--yes`). |
-| `--no-cleanup` | Skip optional cleanup of merged features and worktrees. |
-| `-m` / `--message` | Commit message for the first branch; required with `--yes` when changes exist. |
+## Cómo trabaja
 
-Confirmations default to Yes: Enter proceeds (`[Y/n]` / Spanish `[S/n]`).
+`supagit` puede detectar el flujo habitual `dev`, `pre` y `prod`, o usar una
+lista definida por el proyecto, por ejemplo:
 
-Optional cleanup at the end removes merged feature branches and linked
-worktrees when confirmed interactively, or when `--cleanup` is passed.
-Local branches are deleted only after verifying they are contained in the
-first pipeline branch; if plain `-d` refuses because a stale upstream
-(`origin/work`) is behind, cleanup force-deletes (`-D`) after that check.
+```json
+"branches": ["dev", "staging", "production"]
+```
 
-### Optional sweep configuration
+En cada ejecución:
 
-`.supagit.json` may include an optional `sweep` block (see
-[`.supagit.json.example`](.supagit.json.example)). When absent, feature
-integration uses GitHub merge commits via `gh` and requires `gh` to be available.
+1. Revisa el estado del proyecto y enseña el plan.
+2. Integra el trabajo seleccionado.
+3. Ejecuta las comprobaciones configuradas.
+4. Aplica las migraciones necesarias, si las hay.
+5. Promueve los cambios entre las ramas en el orden indicado.
 
-## Output and safety
+El proceso es interactivo por defecto. Para automatizaciones existen opciones
+como `--yes`, `--lang`, `--pipeline`, `--integrate` y `--no-sweep`.
 
-- **Cyan** — tutor explanations, menu context, Situation preflight, execution
-  plans, and welcome banner.
-- **Green** — where you type: confirmation prompts, commit messages, sweeper
-  answers, and the busy spinner.
-- Successful completion is green.
-- Warnings, errors, aborts, and negative manual-intervention messages are red.
-- After language selection, a short welcome shows the command name, goal,
-  author, and tips.
-- While a long command runs (including auto-update pull/reinstall), a green
-  same-line spinner shows `supagit is working… (Ctrl+C to abort)` (Spanish when
-  `--lang es`).
-- Every interactive prompt is preceded by a cyan explanation of what will
-  happen if you proceed (skipped under `--yes` / non-TTY).
-- `NO_COLOR` and `--no-color` disable color; `--color always` forces it.
-- The command never uses forced Git operations and does not infer an ambiguous
-  deployment target. It will not stash, force-push, auto-rebase, or
-  `reset --hard` while the worktree is dirty; diverged histories and empty PRs
-  fail closed with recovery text.
-- Agents must measure layout, worktrees, and status; run `--dry-run` first; and
-  obtain explicit confirmation before a mutating run. See
-  [`docs/supagit-agent-command.md`](docs/supagit-agent-command.md).
-- Open product backlog (Supabase recovery UX) lives under
-  [`docs/superpowers/backlog/`](docs/superpowers/backlog/); track status in
-  [`tasks/task.md`](tasks/task.md).
+## Documentación
+
+- [Guía para agentes y uso seguro](docs/supagit-agent-command.md)
+- [Ejemplo de configuración](.supagit.json.example)
+- [Tareas abiertas y terminadas](tasks/task.md)
+- [Licencia MIT](LICENSE)
+
+## Participa
+
+Ideas, problemas y mejoras son bienvenidos en
+[GitHub](https://github.com/emiliosevilla/supagit).
