@@ -1380,6 +1380,16 @@ class WelcomeAndBusyTests(unittest.TestCase):
         self.assertIn(MODULE.GREEN, output)
         self.assertNotIn(MODULE.CYAN, output)
 
+    def test_run_raw_reports_command_timeout(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
+        timeout = subprocess.TimeoutExpired(["git", "status"], MODULE.COMMAND_TIMEOUT_S)
+        with patch.object(subprocess, "run", side_effect=timeout):
+            with self.assertRaises(MODULE.ShipError) as ctx:
+                pipeline.run_raw(["git", "status"], capture=True)
+        self.assertIn("timed out", str(ctx.exception))
+        self.assertIn(str(MODULE.COMMAND_TIMEOUT_S), str(ctx.exception))
+
     def test_main_update_reinstalls_and_reexecs(self) -> None:
         source = Path("/tmp/supagit-source")
         with patch.object(MODULE, "needs_skip_update", return_value=False):
