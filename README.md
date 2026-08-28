@@ -1,93 +1,83 @@
 # supagit
 
-> Un lanzamiento completo de Git, escrito con una sola palabra.
+> A complete project release in one Terminal command.
 
-Cuando un agente de IA realiza manualmente estas operaciones, consume tokens y
-tiempo en escribir comandos, explicar cada paso y comprobar el resultado.
-`supagit` ejecuta ese trabajo localmente: la operación no consume tokens de IA.
+When an AI agent performs Git and backend operations manually, it spends time
+and tokens writing commands, explaining each step, and checking the result.
+`supagit` runs that operational work locally: it uses no AI tokens for the
+operation.
 
-`supagit` concentra en un comando de Terminal las operaciones de Git y las
-migraciones del backend configurado. Escribes:
+Type this in the project directory:
 
 ```bash
 supagit
 ```
 
-El programa muestra qué va a hacer, pide confirmación y presenta el resultado
-con claridad. Así el agente puede dedicar su contexto a resolver el problema,
-no a narrar cada paso de Git ni de la migración del backend.
+`supagit` covers the full release flow: Git inspection, commits, pushes,
+pull-request integration, branch promotion, checks, and configured backend
+migrations. It shows the plan, asks for confirmation, and reports clearly what
+happened.
 
-## Qué aporta
+## Why supagit
 
-- Cero tokens de IA para ejecutar el flujo operativo.
-- Un plan visible antes de modificar el proyecto.
-- Mensajes claros cuando algo falla, cambia de forma inesperada o termina bien.
-- Flujo guiado para integrar trabajo y promoverlo entre ramas.
-- Pull requests cuando GitHub las exige.
-- Migraciones del backend, incluidas las de Supabase, sólo si el proyecto las configura.
-- Interfaz en inglés o español.
+- No AI tokens for the operational flow.
+- One visible command instead of a long sequence of Git and backend steps.
+- Clear feedback when something fails, changes unexpectedly, or succeeds.
+- Pull requests when GitHub branch rules require them.
+- Backend migrations, including Supabase migrations, when the project configures them.
+- Fail-closed behavior: no forced pushes, hidden stashes, or destructive resets.
+- English or Spanish prompts, with a spinner for long-running work.
 
-`supagit` trabaja con cuidado: no fuerza pushes, no borra cambios sin permiso y
-se detiene ante estados ambiguos. Su objetivo no es ocultar Git, sino convertir
-un proceso largo y repetitivo en una acción visible y controlable.
+`supagit` works carefully: it stops on ambiguous states and does not hide
+changes or force a push. Its goal is to turn a long, repetitive process into
+one visible and controllable action.
 
-## Empezar
+## Quick start
 
-Instala el comando global:
+Install the global command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
 ```
 
-Entra en el proyecto que quieres publicar y prueba primero el plan:
+Run it from the repository you want to release:
 
 ```bash
-cd ruta/de/tu-proyecto
+cd path/to/your-project
+supagit init --backend none
 supagit --dry-run
-```
-
-Cuando el plan sea correcto:
-
-```bash
 supagit
 ```
 
-Si el proyecto aún no tiene configuración, puedes crearla con:
+For a project with Supabase migrations, use `supagit init --backend supabase`.
+If `.supagit.json` already exists, skip `init`.
 
-```bash
-supagit init --backend none
-```
+## How it works
 
-Para un proyecto con migraciones de Supabase, usa `--backend supabase`.
-
-## Cómo trabaja
-
-`supagit` puede detectar el flujo habitual `dev`, `pre` y `prod`, o usar una
-lista definida por el proyecto, por ejemplo:
+`supagit` detects the usual `dev`, `pre`, and `prod` pipeline, or uses an
+ordered list defined by the project, for example:
 
 ```json
 "branches": ["dev", "staging", "production"]
 ```
 
-En cada ejecución:
+Each run:
 
-1. Revisa el estado del proyecto y enseña el plan.
-2. Integra el trabajo seleccionado.
-3. Ejecuta las comprobaciones configuradas.
-4. Aplica las migraciones necesarias, si las hay.
-5. Promueve los cambios entre las ramas en el orden indicado.
+1. Inspects the project and shows the plan.
+2. Integrates the selected work.
+3. Runs the configured checks.
+4. Applies the required migrations, when configured.
+5. Promotes changes through the branches in the defined order.
 
-El proceso es interactivo por defecto. Para automatizaciones existen opciones
-como `--yes`, `--lang`, `--pipeline`, `--integrate` y `--no-sweep`.
+The process is interactive by default. Automation options include `--yes`,
+`--lang`, `--pipeline`, `--integrate`, and `--no-sweep`.
 
-## Documentación
+## More information
 
-- [Guía para agentes y uso seguro](docs/supagit-agent-command.md)
-- [Ejemplo de configuración](.supagit.json.example)
-- [Tareas abiertas y terminadas](tasks/task.md)
-- [Licencia MIT](LICENSE)
+- [Agent guide and safe usage](docs/supagit-agent-command.md)
+- [Configuration example](.supagit.json.example)
+- [Open and completed tasks](tasks/task.md)
+- [MIT License](LICENSE)
 
-## Participa
-
-Ideas, problemas y mejoras son bienvenidos en
+Ideas, issues, and improvements are welcome on
 [GitHub](https://github.com/emiliosevilla/supagit).
