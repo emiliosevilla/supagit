@@ -80,8 +80,27 @@ class BranchDiscoveryTests(unittest.TestCase):
         prompt = mocked_input.call_args.args[0]
         self.assertTrue(prompt.startswith(MODULE.Pipeline.GREEN))
         self.assertTrue(prompt.endswith(MODULE.Pipeline.RESET))
-        self.assertIn("Commit message for main: ", prompt)
+        self.assertRegex(
+            prompt,
+            r"Commit message for main \[\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\]: ",
+        )
         self.assertNotIn("Continue?", prompt)
+
+    def test_commit_prompt_enter_uses_timestamp_default(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(
+            dry_run=False,
+            yes=False,
+            config_path=None,
+            message=None,
+            color="never",
+        )
+        with patch("builtins.input", return_value="") as mocked_input:
+            pipeline.dev = "main"
+            message = pipeline._commit_message()
+
+        self.assertRegex(message, r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")
+        self.assertIn(f"[{message}]", mocked_input.call_args.args[0])
 
     def test_success_status_uses_green_when_color_is_forced(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -1341,9 +1360,10 @@ class WelcomeAndBusyTests(unittest.TestCase):
                 with patch.object(MODULE.supagit_update, "needs_update", return_value=True):
                     with patch.object(MODULE.supagit_update, "pull_and_reinstall") as pull:
                         with patch("os.execve", side_effect=SystemExit(0)) as execve:
-                            with patch("builtins.print"):
-                                with self.assertRaises(SystemExit):
-                                    MODULE.main(["--lang", "en", "--yes", "--no-sweep"])
+                            with patch.object(MODULE, "BusySpinner") as spinner:
+                                with patch("builtins.print"):
+                                    with self.assertRaises(SystemExit):
+                                        MODULE.main(["--lang", "en", "--yes", "--no-sweep"])
         ensure.assert_called_once()
         pull.assert_called_once()
         args, kwargs = pull.call_args
@@ -1351,6 +1371,7 @@ class WelcomeAndBusyTests(unittest.TestCase):
         self.assertEqual(kwargs.get("lang"), "en")
         self.assertIs(kwargs.get("progress"), MODULE.sys.stderr)
         execve.assert_called_once()
+        self.assertEqual(spinner.call_count, 2)
 
 
 class CheckoutFlexTests(unittest.TestCase):

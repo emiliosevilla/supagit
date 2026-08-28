@@ -131,6 +131,9 @@ deleted only after verifying they are contained in `pipeline[0]`; if
   preflight for `pipeline[0]`, relocates to the main checkout when needed,
   publishes when appropriate, and fast-forward syncs the first pipeline branch
   before promotion.
+- When an interactive commit message is requested, Enter accepts the suggested
+  `YYYY-MM-DD_HH-MM-SS` timestamp; `-m` / `--message` remains available for an
+  explicit message.
 - `-m` / `--message` is required with `--yes` when the first branch has changes
   to commit.
 
@@ -155,10 +158,11 @@ An optional `sweep` block in `.supagit.json` may document PR merge preferences
 **Cyan** is tutor context: explanations before each interactive step, sweeper
 menu blocks, the post-menu execution plan, and the startup welcome banner.
 **Green** is where the user types: confirmation prompts, commit messages, and
-sweeper answers — and also the busy spinner. After language selection, a short
-welcome shows the command name, goal, author, and tips. While a long child
-command runs (including auto-update pull/reinstall), a green same-line spinner
-shows that supagit is working and that Ctrl+C aborts.
+sweeper answers — and also the busy spinner. The initial GitHub update check and
+any auto-update pull/reinstall show a green same-line spinner while supagit is
+working and that Ctrl+C aborts. After language selection, a short welcome shows
+the command name, goal, author, and tips. While any other long child command runs,
+the same spinner is shown.
 Every interactive `prompt` / `confirm` is preceded by a cyan explanation
 (skipped under `--yes` / non-TTY). `NO_COLOR` and `--no-color` disable color;
 `--color always` forces it. Warnings, errors, aborts, and other negative

@@ -28,8 +28,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "backend_prompt": "Backend [none/supabase] (none): ",
         "backend_invalid": "Backend must be 'none' or 'supabase'.",
         "created_config": "Created project configuration: {path}",
-        "commit_message_prompt": "Commit message for {branch}: ",
-        "commit_message_empty": "The commit message cannot be empty.",
+        "commit_message_prompt": "Commit message for {branch} [{default}]: ",
         "commit_message_yes": "With --yes, provide --message/-m for the initial {branch} commit.",
         "pipeline_order_prompt": "Order? Enter = {default}: ",
         "integrate_prompt": (
@@ -516,8 +515,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "backend_prompt": "Backend [none/supabase] (none): ",
         "backend_invalid": "El backend debe ser 'none' o 'supabase'.",
         "created_config": "Configuración del proyecto creada: {path}",
-        "commit_message_prompt": "Mensaje de commit para {branch}: ",
-        "commit_message_empty": "El mensaje de commit no puede estar vacío.",
+        "commit_message_prompt": "Mensaje de commit para {branch} [{default}]: ",
         "commit_message_yes": "Con --yes, indica --message/-m para el commit inicial de {branch}.",
         "pipeline_order_prompt": "¿Orden? Enter = {default}: ",
         "integrate_prompt": (

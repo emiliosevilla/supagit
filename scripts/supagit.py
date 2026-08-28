@@ -8,6 +8,7 @@ deployment commands. A project may use Supabase or no backend at all.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 import re
@@ -1116,13 +1117,16 @@ class Pipeline:
             return "<commit-message-required>"
         if self.options.yes:
             raise ShipError(t("commit_message_yes", branch=label))
+        default_message = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         message = self.tutor_prompt(
             t("explain_commit_message"),
-            t("commit_message_prompt", branch=label),
+            t(
+                "commit_message_prompt",
+                branch=label,
+                default=default_message,
+            ),
         )
-        if not message:
-            raise ShipError(t("commit_message_empty"))
-        return message
+        return message or default_message
 
     def _assert_dev_checkout(self) -> None:
         if self.options.dry_run:
@@ -2371,22 +2375,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("[supagit] Checking for updates… / Comprobando actualizaciones…")
         try:
             if not needs_skip_update():
-                update_lang = supagit_update.resolve_update_lang(raw_argv)
-                source = supagit_update.ensure_healthy_source_root(
-                    lang=update_lang, progress=sys.stderr
+                spinner_enabled = (
+                    colour_enabled("auto", sys.stderr)
+                    and "--no-color" not in raw_argv
                 )
-                repaired = bool(
-                    getattr(supagit_update.ensure_healthy_source_root, "repaired", False)
-                )
-                if supagit_update.source_has_local_changes(source):
+                with BusySpinner(enabled=spinner_enabled):
+                    update_lang = supagit_update.resolve_update_lang(raw_argv)
+                    source = supagit_update.ensure_healthy_source_root(
+                        lang=update_lang, progress=sys.stderr
+                    )
+                    repaired = bool(
+                        getattr(
+                            supagit_update.ensure_healthy_source_root,
+                            "repaired",
+                            False,
+                        )
+                    )
+                    source_dirty = supagit_update.source_has_local_changes(source)
+                    update_available = not source_dirty and supagit_update.needs_update(
+                        source
+                    )
+                if source_dirty:
                     print(
                         "[supagit] Local source changes detected; skipping self-update."
                     )
-                elif supagit_update.needs_update(source):
+                elif update_available:
                     print("[supagit] Update available; pulling and reinstalling… / Hay actualización…")
-                    supagit_update.pull_and_reinstall(
-                        source, lang=update_lang, progress=sys.stderr
-                    )
+                    with BusySpinner(enabled=spinner_enabled):
+                        supagit_update.pull_and_reinstall(
+                            source, lang=update_lang, progress=sys.stderr
+                        )
                     repaired = True
                 if repaired:
                     print("[supagit] Update installed; restarting… / Actualización instalada; reiniciando…")
