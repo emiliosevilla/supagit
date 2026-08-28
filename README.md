@@ -2,11 +2,12 @@
 
 > Un lanzamiento completo de Git, escrito con una sola palabra.
 
-Los agentes de IA pierden tiempo y tokens escribiendo, explicando y repitiendo
-operaciones de Git: comprobar el estado, cambiar de rama, integrar cambios,
-hacer `push`, abrir pull requests y comprobar si todo terminó bien.
+Cuando un agente de IA realiza manualmente estas operaciones, consume tokens y
+tiempo en escribir comandos, explicar cada paso y comprobar el resultado.
+`supagit` ejecuta ese trabajo localmente: la operación no consume tokens de IA.
 
-`supagit` concentra ese trabajo en un comando de Terminal. Escribes:
+`supagit` concentra en un comando de Terminal las operaciones de Git y las
+migraciones del backend configurado. Escribes:
 
 ```bash
 supagit
@@ -14,16 +15,16 @@ supagit
 
 El programa muestra qué va a hacer, pide confirmación y presenta el resultado
 con claridad. Así el agente puede dedicar su contexto a resolver el problema,
-no a narrar cada paso de Git.
+no a narrar cada paso de Git ni de la migración del backend.
 
 ## Qué aporta
 
-- Menos comandos repetidos y menos tokens consumidos por cada lanzamiento.
+- Cero tokens de IA para ejecutar el flujo operativo.
 - Un plan visible antes de modificar el proyecto.
 - Mensajes claros cuando algo falla, cambia de forma inesperada o termina bien.
 - Flujo guiado para integrar trabajo y promoverlo entre ramas.
 - Pull requests cuando GitHub las exige.
-- Migraciones de Supabase, sólo si el proyecto las configura.
+- Migraciones del backend, incluidas las de Supabase, sólo si el proyecto las configura.
 - Interfaz en inglés o español.
 
 `supagit` trabaja con cuidado: no fuerza pushes, no borra cambios sin permiso y
