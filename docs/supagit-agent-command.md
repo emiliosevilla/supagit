@@ -108,9 +108,9 @@ promotion steps.
 
 Before each promotion into a destination branch, `supagit` queries GitHub branch
 rules (`gh api …/rules/branches/{branch}`, with classic protection as fallback).
-If a pull-request rule applies, promotion uses a PR (no `--admin` bypass).
-Otherwise it uses local merge + push. Non-GitHub remotes always use the direct
-path.
+If a pull-request rule applies, promotion uses a PR and starts with
+`gh pr merge --merge --admin`. Otherwise it uses local merge + push. Non-GitHub
+remotes always use the direct path.
 
 Optional cleanup at the end removes merged feature branches and linked worktrees
 when the user confirms (`--cleanup` applies without prompting when used with

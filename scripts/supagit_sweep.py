@@ -587,12 +587,12 @@ class GhClient:
     def merge_pr(
         self, number: int, *, delete_branch: bool = True, admin: bool = False
     ) -> None:
-        """Merge via ladder: plain merge → --auto → --admin.
+        """Merge via ladder: --admin → --auto → plain merge.
 
         ``admin`` is kept for call-site compatibility but is ignored: the ladder
-        always ends with ``--admin`` after policy blocks, and never starts there.
+        always starts with ``--admin`` when merging a pull request.
         """
-        del admin  # ladder owns admin escalation
+        del admin  # ladder always starts with administrator merge
         if self._dry_run:
             return
 
@@ -606,7 +606,7 @@ class GhClient:
                 command.append("--delete-branch")
             return command
 
-        first = _cmd()
+        first = _cmd(use_admin=True)
         first_exc: Exception
         try:
             self._run(first)
@@ -633,7 +633,7 @@ class GhClient:
             except Exception:
                 raise first_exc
 
-        # Branch-policy / not-mergeable: climb merge → --auto → --admin.
+        # Branch-policy / not-mergeable: try auto-merge, then plain merge.
         # `--auto` exit 0 only arms auto-merge; wait for MERGED before success.
         if policyish:
             auto_armed = False
@@ -649,13 +649,13 @@ class GhClient:
                 print(t("note_pr_auto_merge_armed", number=number))
 
             try:
-                self._run(_cmd(use_admin=True))
+                self._run(_cmd())
                 return
-            except Exception as admin_exc:
+            except Exception as fallback_exc:
                 if auto_armed:
                     raise SweepError(
                         t("error_pr_auto_merge_not_completed", number=number)
-                    ) from admin_exc
+                    ) from fallback_exc
                 raise first_exc
 
         raise first_exc

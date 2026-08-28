@@ -745,8 +745,8 @@ class GhClientTests(unittest.TestCase):
             client.ensure_ready()
         self.assertIn("network unreachable", str(ctx.exception))
 
-    def test_merge_pr_policy_ladder_merge_then_auto_then_admin(self) -> None:
-        """Policy blocks climb merge → --auto → --admin (never admin first)."""
+    def test_merge_pr_policy_ladder_admin_then_auto_then_merge(self) -> None:
+        """Policy blocks start with --admin, then use the fallbacks."""
         calls: list[list[str]] = []
         outcomes = [
             RuntimeError("base branch policy prohibits the merge"),
@@ -763,17 +763,17 @@ class GhClientTests(unittest.TestCase):
 
         client = supagit_sweep.GhClient(run_raw, dry_run=False)
         client.merge_pr(9, delete_branch=False)
-        self.assertEqual(calls[0], ["gh", "pr", "merge", "9", "--merge"])
+        self.assertEqual(
+            calls[0], ["gh", "pr", "merge", "9", "--merge", "--admin"]
+        )
         self.assertEqual(
             calls[1], ["gh", "pr", "merge", "9", "--merge", "--auto"]
         )
-        self.assertEqual(
-            calls[2], ["gh", "pr", "merge", "9", "--merge", "--admin"]
-        )
-        self.assertNotIn("--admin", calls[0])
+        self.assertEqual(calls[2], ["gh", "pr", "merge", "9", "--merge"])
+        self.assertIn("--admin", calls[0])
         self.assertNotIn("--admin", calls[1])
 
-    def test_merge_pr_policy_auto_succeeds_without_admin(self) -> None:
+    def test_merge_pr_policy_auto_succeeds_after_admin_first(self) -> None:
         calls: list[list[str]] = []
         outcomes = [
             RuntimeError("not mergeable by policy"),
@@ -793,14 +793,15 @@ class GhClientTests(unittest.TestCase):
         with patch.object(supagit_sweep, "sleep", lambda _s: None):
             client.merge_pr(11, delete_branch=True)
         self.assertEqual(
-            calls[0], ["gh", "pr", "merge", "11", "--merge", "--delete-branch"]
+            calls[0],
+            ["gh", "pr", "merge", "11", "--merge", "--admin", "--delete-branch"],
         )
         self.assertEqual(
             calls[1],
             ["gh", "pr", "merge", "11", "--merge", "--auto", "--delete-branch"],
         )
         self.assertTrue(any(c[:3] == ["gh", "pr", "view"] for c in calls))
-        self.assertFalse(any("--admin" in c for c in calls))
+        self.assertTrue(any("--admin" in c for c in calls))
 
     def test_merge_pr_auto_exit_zero_waits_for_merged_before_success(self) -> None:
         """`--auto` exit 0 only arms auto-merge; success requires MERGED state."""
@@ -815,7 +816,7 @@ class GhClientTests(unittest.TestCase):
                 if "--auto" in cmd:
                     return ""
                 if "--admin" in cmd:
-                    raise AssertionError("must not escalate to admin once MERGED")
+                    raise RuntimeError("base branch policy prohibits the merge")
                 raise RuntimeError("base branch policy prohibits the merge")
             raise AssertionError(cmd)
 
@@ -833,10 +834,12 @@ class GhClientTests(unittest.TestCase):
         )
         self.assertEqual(sum(1 for c in calls if c[:3] == ["gh", "pr", "view"]), 3)
         self.assertEqual(len(sleeps), 2)
-        self.assertFalse(any("--admin" in c for c in calls))
+        self.assertIn(
+            ["gh", "pr", "merge", "15", "--merge", "--admin"], calls
+        )
 
-    def test_merge_pr_auto_armed_not_merged_escalates_to_admin(self) -> None:
-        """Auto exit 0 without MERGED must not return success; try --admin next."""
+    def test_merge_pr_auto_armed_not_merged_tries_plain_merge(self) -> None:
+        """Auto exit 0 without MERGED must not return success; try plain merge."""
         calls: list[list[str]] = []
 
         def run_raw(cmd, **kwargs):
@@ -845,10 +848,10 @@ class GhClientTests(unittest.TestCase):
                 return '{"state":"OPEN"}'
             if list(cmd)[:4] == ["gh", "pr", "merge", "16"]:
                 if "--admin" in cmd:
-                    return ""
+                    raise RuntimeError("not mergeable by branch policy")
                 if "--auto" in cmd:
                     return ""
-                raise RuntimeError("not mergeable by policy")
+                return ""
             raise AssertionError(cmd)
 
         client = supagit_sweep.GhClient(run_raw, dry_run=False)
@@ -856,19 +859,12 @@ class GhClientTests(unittest.TestCase):
             client.merge_pr(16, delete_branch=False)
 
         self.assertTrue(any("--auto" in c for c in calls))
-        self.assertTrue(any("--admin" in c for c in calls))
-        view_before_admin = True
-        seen_admin = False
-        for c in calls:
-            if "--admin" in c:
-                seen_admin = True
-                break
-            if c[:3] == ["gh", "pr", "view"]:
-                view_before_admin = True
-        self.assertTrue(seen_admin)
-        self.assertTrue(view_before_admin)
+        self.assertEqual(
+            calls[0], ["gh", "pr", "merge", "16", "--merge", "--admin"]
+        )
+        self.assertTrue(any(c[-1] == "--merge" and "--auto" not in c for c in calls))
 
-    def test_merge_pr_auto_armed_admin_fails_fail_closed(self) -> None:
+    def test_merge_pr_auto_armed_fallback_fails_fail_closed(self) -> None:
         import supagit_i18n
 
         supagit_i18n.set_lang("en")
@@ -880,7 +876,7 @@ class GhClientTests(unittest.TestCase):
                 return '{"state":"OPEN"}'
             if list(cmd)[:4] == ["gh", "pr", "merge", "17"]:
                 if "--admin" in cmd:
-                    raise RuntimeError("admin merge blocked")
+                    raise RuntimeError("admin merge blocked by branch policy")
                 if "--auto" in cmd:
                     return ""
                 raise RuntimeError("not mergeable by policy")
@@ -894,7 +890,9 @@ class GhClientTests(unittest.TestCase):
         self.assertIn("17", detail)
         self.assertTrue("auto" in detail or "armed" in detail or "pending" in detail)
         self.assertTrue(any("--auto" in c for c in calls))
-        self.assertTrue(any("--admin" in c for c in calls))
+        self.assertEqual(
+            calls[0], ["gh", "pr", "merge", "17", "--merge", "--admin"]
+        )
 
     def test_merge_pr_refreshes_token_then_retries(self) -> None:
         calls: list[list[str]] = []
@@ -941,7 +939,7 @@ class GhClientTests(unittest.TestCase):
         client.merge_pr(42)
         self.assertEqual(
             calls[0],
-            ["gh", "pr", "merge", "42", "--merge", "--delete-branch"],
+            ["gh", "pr", "merge", "42", "--merge", "--admin", "--delete-branch"],
         )
 
     def test_merge_pr_can_keep_head_branch(self) -> None:
@@ -953,9 +951,11 @@ class GhClientTests(unittest.TestCase):
 
         client = supagit_sweep.GhClient(run_raw, dry_run=False)
         client.merge_pr(7, delete_branch=False)
-        self.assertEqual(calls[0], ["gh", "pr", "merge", "7", "--merge"])
+        self.assertEqual(
+            calls[0], ["gh", "pr", "merge", "7", "--merge", "--admin"]
+        )
 
-    def test_promote_via_pr_uses_merge_ladder_not_admin_first(self) -> None:
+    def test_promote_via_pr_starts_with_admin_merge(self) -> None:
         merges: list[tuple] = []
         pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
         pipeline.options = ENGINE.Options(
@@ -996,7 +996,6 @@ class GhClientTests(unittest.TestCase):
         self.assertEqual(len(merges), 1)
         self.assertEqual(merges[0][0], 5)
         self.assertEqual(merges[0][1].get("delete_branch"), False)
-        self.assertNotEqual(merges[0][1].get("admin"), True)
 
     def test_pr_number_from_create_output(self) -> None:
         self.assertEqual(

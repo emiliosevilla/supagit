@@ -98,7 +98,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "error_promote_pr_merge_failed": (
             "Could not merge pull request #{number} ({source} → {target}) after retrying "
-            "authentication refresh and administrator/auto merge. Check `gh auth status` "
+            "authentication refresh and administrator/auto/plain merge fallbacks. Check "
+            "`gh auth status` "
             "and repository permissions, then re-run supagit."
         ),
         "error_gh_missing": (
@@ -240,11 +241,11 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "note_pr_auto_merge_armed": (
             "Pull request #{number}: auto-merge is armed but the merge has not "
-            "completed yet. Trying administrator merge as a hard override."
+            "completed yet. Trying plain merge as a fallback."
         ),
         "error_pr_auto_merge_not_completed": (
             "Pull request #{number}: auto-merge was armed but the pull request "
-            "never reached MERGED, and the administrator merge override also failed. "
+            "never reached MERGED, and the plain merge fallback also failed. "
             "supagit will not continue as if the merge landed."
         ),
         "error_integrate_number": (
@@ -586,7 +587,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "error_promote_pr_merge_failed": (
             "No se pudo fusionar el pull request #{number} ({source} → {target}) tras "
-            "reintentar refresco de autenticación y merge con administrador/auto. "
+            "reintentar refresco de autenticación y las alternativas de merge con "
+            "administrador/auto/normal. "
             "Revisa `gh auth status` y los permisos del repositorio, y vuelve a ejecutar supagit."
         ),
         "error_gh_missing": (
@@ -730,11 +732,11 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "note_pr_auto_merge_armed": (
             "Pull request #{number}: auto-merge está armado pero la fusión aún no "
-            "ha terminado. Probando fusión de administrador como anulación dura."
+            "ha terminado. Probando fusión normal como alternativa."
         ),
         "error_pr_auto_merge_not_completed": (
             "Pull request #{number}: auto-merge quedó armado pero la pull request "
-            "nunca llegó a MERGED, y la anulación con fusión de administrador también "
+            "nunca llegó a MERGED, y la fusión normal alternativa también "
             "falló. supagit no continuará como si el merge hubiera aterrizado."
         ),
         "error_integrate_number": (
