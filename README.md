@@ -88,7 +88,7 @@ tool uses it.
 
 ## Author
 
-Created by [Emilio Sevilla Ortego](https://github.com/emiliosevilla).
+Created by [Emilio Sevilla](https://github.com/emiliosevilla).
 
 ## License
 
