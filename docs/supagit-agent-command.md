@@ -160,9 +160,10 @@ menu blocks, the post-menu execution plan, and the startup welcome banner.
 **Green** is where the user types: confirmation prompts, commit messages, and
 sweeper answers — and also the busy spinner. The initial GitHub update check and
 any auto-update pull/reinstall show a green same-line spinner while supagit is
-working and that Ctrl+C aborts. After language selection, a short welcome shows
-the command name, goal, author, and tips. While any other long child command runs,
-the same spinner is shown.
+working and that Ctrl+C aborts. Update commands stop after 20 seconds if GitHub
+or Git does not respond, and report the failed step. After language selection, a
+short welcome shows the command name, goal, author, and tips. While any other
+long child command runs, the same spinner is shown.
 Every interactive `prompt` / `confirm` is preceded by a cyan explanation
 (skipped under `--yes` / non-TTY). `NO_COLOR` and `--no-color` disable color;
 `--color always` forces it. Warnings, errors, aborts, and other negative

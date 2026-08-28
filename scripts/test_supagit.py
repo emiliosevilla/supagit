@@ -574,6 +574,18 @@ class I18nAndUpdateTests(unittest.TestCase):
         with patch.object(update, "_run", side_effect=fake_run):
             self.assertTrue(update.needs_update(Path("/tmp")))
 
+    def test_update_command_timeout_is_reported(self) -> None:
+        update = MODULE.supagit_update
+        timeout = subprocess.TimeoutExpired(
+            ["git", "fetch", "origin", "main"],
+            update.UPDATE_COMMAND_TIMEOUT_S,
+        )
+        with patch.object(subprocess, "run", side_effect=timeout):
+            with self.assertRaises(update.UpdateError) as ctx:
+                update._run(Path("/tmp/source"), "git", "fetch", "origin", "main")
+        self.assertIn("timed out", str(ctx.exception))
+        self.assertIn(str(update.UPDATE_COMMAND_TIMEOUT_S), str(ctx.exception))
+
     def test_needs_update_false_when_current(self) -> None:
         update = MODULE.supagit_update
 

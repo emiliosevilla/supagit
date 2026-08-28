@@ -25,6 +25,7 @@ GITHUB_MARKER = "github.com/emiliosevilla/supagit"
 GITHUB_CLONE_URL = "https://github.com/emiliosevilla/supagit.git"
 # Visible on every reinstall so users can confirm freshness.
 BUILD_STAMP = "2026-08-12"
+UPDATE_COMMAND_TIMEOUT_S = 20
 
 
 def source_root_from_marker(home: Path | None = None) -> Path | None:
@@ -69,13 +70,19 @@ def source_has_local_changes(source_root: Path) -> bool:
 
 
 def _run(cwd: Path, *args: str) -> str:
-    completed = subprocess.run(
-        list(args),
-        cwd=str(cwd),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        completed = subprocess.run(
+            list(args),
+            cwd=str(cwd),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=UPDATE_COMMAND_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpdateError(
+            f"{' '.join(args)}: timed out after {UPDATE_COMMAND_TIMEOUT_S}s"
+        ) from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "command failed").strip()
         raise UpdateError(f"{' '.join(args)}: {detail}")
@@ -109,14 +116,20 @@ def _run_installer(cwd: Path, installer: Path, lang: str) -> None:
     """Run the global installer without blocking on an interactive language menu."""
     if lang not in ("en", "es"):
         lang = "en"
-    completed = subprocess.run(
-        ["sh", str(installer), "--lang", lang],
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        completed = subprocess.run(
+            ["sh", str(installer), "--lang", lang],
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=UPDATE_COMMAND_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpdateError(
+            f"sh {installer} --lang {lang}: timed out after {UPDATE_COMMAND_TIMEOUT_S}s"
+        ) from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "command failed").strip()
         raise UpdateError(f"sh {installer} --lang {lang}: {detail}")
@@ -223,21 +236,27 @@ def _shallow_clone_github(dest: Path) -> None:
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(
-        [
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            DEFAULT_BRANCH,
-            GITHUB_CLONE_URL,
-            str(dest),
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                DEFAULT_BRANCH,
+                GITHUB_CLONE_URL,
+                str(dest),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=UPDATE_COMMAND_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpdateError(
+            f"git clone {GITHUB_CLONE_URL}: timed out after {UPDATE_COMMAND_TIMEOUT_S}s"
+        ) from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "git clone failed").strip()
         raise UpdateError(t("update_clone_failed", detail=detail))
