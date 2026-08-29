@@ -440,24 +440,28 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "error_pipeline_number": (
             "Invalid pipeline number: {token}. Use the numbers shown in the main-branches list."
         ),
-        "explain_branches_init": (
-            "Supagit needs this project's main branches, in release order "
-            "(for example: main, or dev,pre,prod)."
+        "branches_prompt": "Main branches in order (comma-separated): ",
+        "explain_branch_order": (
+            "Choose the release pipeline and its order from the branches below; "
+            "leave feature branches out. Use names or numbers."
         ),
-        "branches_prompt": "Main branches in order (comma-separated) [{default}]: ",
+        "explain_branch_sets_differ": (
+            "Local and remote branches differ. Local: {local}. Remote: {remote}."
+        ),
+        "branch_source_options": (
+            "1) Use only coincident branches ({common})\n"
+            "2) Use local branches (local-only branches may be published)\n"
+            "3) Use remote branches (remote-only branches may be fetched)\n"
+            "4) Cancel and reconcile them manually"
+        ),
+        "branch_source_prompt": "How should supagit continue? [1-4]: ",
+        "error_branch_sets_differ": (
+            "Local and remote branches differ. Run interactively and choose how to continue, "
+            "or reconcile them before using --yes."
+        ),
         "missing_config_need_branches": (
-            "Missing configuration file {path}. With --yes or non-TTY, also pass "
-            "--pipeline a,b,c to declare the main branches."
-        ),
-        "error_branch_detection": (
-            'Could not detect the {role} branch. Remote branches: {available}. '
-            'Set "branches" in {path} to an ordered list (for example "branches": ["main"]), '
-            "or re-create the config with: supagit init --branches a,b,c"
-        ),
-        "error_branch_ambiguous": (
-            "Ambiguous {role} branch detection: {candidates}. "
-            'Set "branches" in {path} to an ordered list, or re-create the config with: '
-            "supagit init --branches a,b,c"
+            "No pipeline order is configured in {path}. Run interactively to choose it, "
+            "or pass --pipeline a,b,c."
         ),
         "error_first_branch_in_worktree": (
             "{branch} is already checked out in another worktree: {path}. "
@@ -941,24 +945,28 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "error_pipeline_number": (
             "Número de pipeline no válido: {token}. Usa los números de la lista de ramas principales."
         ),
-        "explain_branches_init": (
-            "Supagit necesita las ramas principales de este proyecto, en orden de publicación "
-            "(por ejemplo: main, o dev,pre,prod)."
+        "branches_prompt": "Ramas principales en orden (separadas por comas): ",
+        "explain_branch_order": (
+            "Elige el pipeline de publicación y su orden entre las ramas siguientes; "
+            "deja fuera las ramas de trabajo. Usa nombres o números."
         ),
-        "branches_prompt": "Ramas principales en orden (separadas por comas) [{default}]: ",
+        "explain_branch_sets_differ": (
+            "Las ramas locales y remotas no coinciden. Locales: {local}. Remotas: {remote}."
+        ),
+        "branch_source_options": (
+            "1) Usar solo las ramas coincidentes ({common})\n"
+            "2) Usar las ramas locales (las exclusivas podrían publicarse)\n"
+            "3) Usar las ramas remotas (las exclusivas podrían descargarse)\n"
+            "4) Cancelar y reconciliarlas manualmente"
+        ),
+        "branch_source_prompt": "¿Cómo debe continuar supagit? [1-4]: ",
+        "error_branch_sets_differ": (
+            "Las ramas locales y remotas no coinciden. Ejecuta supagit de forma interactiva "
+            "para elegir cómo continuar, o reconcílialas antes de usar --yes."
+        ),
         "missing_config_need_branches": (
-            "Falta el fichero de configuración {path}. Con --yes o sin TTY, pasa también "
-            "--pipeline a,b,c para declarar las ramas principales."
-        ),
-        "error_branch_detection": (
-            "No se pudo detectar la rama {role}. Ramas remotas: {available}. "
-            'Define "branches" en {path} como una lista ordenada (por ejemplo "branches": ["main"]), '
-            "o recrea la configuración con: supagit init --branches a,b,c"
-        ),
-        "error_branch_ambiguous": (
-            "Detección ambigua de la rama {role}: {candidates}. "
-            'Define "branches" en {path} como una lista ordenada, o recrea la configuración con: '
-            "supagit init --branches a,b,c"
+            "No hay un orden de pipeline configurado en {path}. Ejecuta supagit de forma "
+            "interactiva para elegirlo, o pasa --pipeline a,b,c."
         ),
         "error_first_branch_in_worktree": (
             "{branch} ya está abierta en otro worktree: {path}. "

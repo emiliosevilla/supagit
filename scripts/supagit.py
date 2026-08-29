@@ -172,14 +172,10 @@ def init_project_config(
 ) -> dict:
     config = {
         "remote": "origin",
-        "branches": list(branch_names) if branch_names else {"dev": None, "pre": None, "prod": None},
-        "branch_aliases": {
-            "dev": ["dev", "develop", "development", "desarrollo", "work"],
-            "pre": ["pre", "preview", "staging", "stage", "qa", "beta"],
-            "prod": ["prod", "production", "produccion", "real", "live"],
-        },
         "checks": [],
     }
+    if branch_names:
+        config["branches"] = list(branch_names)
     if backend == "none":
         config["backend"] = {"provider": "none"}
     else:
@@ -290,11 +286,6 @@ def initialise_project(args: argparse.Namespace, options: Options) -> int:
 
 
 class Pipeline:
-    DEFAULT_BRANCH_ALIASES = {
-        "dev": ("dev", "develop", "development", "desarrollo", "work"),
-        "pre": ("pre", "preview", "staging", "stage", "qa", "beta"),
-        "prod": ("prod", "production", "produccion", "real", "live"),
-    }
     GREEN = GREEN
     RED = RED
     RESET = RESET
@@ -308,8 +299,6 @@ class Pipeline:
         self._branch_check_on_main = self.layout.is_linked_launch
         self.config = self._load_config()
         self.remote = self.config.get("remote", "origin")
-        self.backend = self._resolve_backend()
-        self.cli = self.backend.cli
         self.linked_ref: str | None = None
         # Measure the launch checkout (linked worktree or main), not always main_root.
         self.original_branch = self.git(
@@ -317,6 +306,8 @@ class Pipeline:
         ).strip()
         self.project_name = self._project_name()
         self.branches = self._resolve_branches()
+        self.backend = self._resolve_backend()
+        self.cli = self.backend.cli
         self.dev = self.branches[0]
         self.pre = self.branches[1] if len(self.branches) > 1 else None
         self.prod = self.branches[-1]
@@ -366,17 +357,6 @@ class Pipeline:
                 for part in self.options.pipeline_order.split(",")
                 if part.strip()
             ]
-        if not branch_names:
-            if self.options.yes or not sys.stdin.isatty():
-                raise ShipError(t("missing_config_need_branches", path=path))
-            live = self.git("branch", "--show-current", capture=True).strip() or "main"
-            answer = self.tutor_prompt(
-                t("explain_branches_init"),
-                t("branches_prompt", default=live),
-            )
-            branch_names = [
-                part.strip() for part in answer.split(",") if part.strip()
-            ] or [live]
         config = init_project_config(
             backend,
             "SUPABASE_PRE_PROJECT_REF",
@@ -403,13 +383,10 @@ class Pipeline:
     def _validate_config(config: dict, path: Path) -> None:
         if not isinstance(config, dict):
             raise ShipError(f"Invalid configuration in {path}: the root must be a JSON object.")
-        try:
-            branches = config["branches"]
-        except (KeyError, TypeError) as exc:
-            raise ShipError(
-                f"Incomplete configuration in {path}: branches are required."
-            ) from exc
-        if isinstance(branches, dict):
+        branches = config.get("branches")
+        if branches is None:
+            pass
+        elif isinstance(branches, dict):
             if set(branches) != {"dev", "pre", "prod"}:
                 raise ShipError("Legacy branches must define exactly dev, pre, and prod.")
             if any(value is not None and (not isinstance(value, str) or not value.strip()) for value in branches.values()):
@@ -467,12 +444,17 @@ class Pipeline:
         backend = config.get("backend")
         if backend is None:
             supabase = config["supabase"]
+            role_branches = getattr(self, "_resolved_role_branches", None)
             return BackendConfig(
                 provider="supabase",
                 cli=supabase.get("cli", "supabase"),
                 targets={
-                    "pre": supabase["pruebas_project_ref"],
-                    "prod": supabase["prod_project_ref"],
+                    role_branches.get(role, role) if role_branches is not None else role: ref
+                    for role, ref in (
+                        ("pre", supabase["pruebas_project_ref"]),
+                        ("prod", supabase["prod_project_ref"]),
+                    )
+                    if role_branches is None or role in role_branches
                 },
             )
 
@@ -483,9 +465,16 @@ class Pipeline:
 
         environments = backend.get("environments", {})
         auto_detect = backend.get("auto_detect", True)
+        role_branches = (
+            getattr(self, "_resolved_role_branches", None)
+            if not isinstance(config.get("branches"), list)
+            else None
+        )
         targets = {
-            role: self._resolve_supabase_target(role, target, auto_detect)
+            role_branches.get(role, role) if role_branches is not None else role:
+            self._resolve_supabase_target(role, target, auto_detect)
             for role, target in environments.items()
+            if role_branches is None or role in role_branches
         }
         if targets:
             print("Backend: Supabase; targets resolved for " + ", ".join(targets))
@@ -633,82 +622,99 @@ class Pipeline:
                 branches.append(line.split("refs/heads/", 1)[1].strip())
         return tuple(sorted(set(branches)))
 
-    @staticmethod
-    def _normalise_branch(value: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    def _local_branches(self) -> tuple[str, ...]:
+        output = self.git(
+            "for-each-ref", "--format=%(refname:short)", "refs/heads/", capture=True
+        )
+        return tuple(sorted(set(output.splitlines())))
 
-    @classmethod
-    def rank_branch_candidates(cls, role: str, branches: Sequence[str], aliases: Sequence[str] | None = None) -> list[tuple[int, str]]:
-        names = tuple(aliases or cls.DEFAULT_BRANCH_ALIASES[role])
-        ranked: list[tuple[int, str]] = []
-        for branch in branches:
-            normalised = cls._normalise_branch(branch)
-            score = 0
-            for alias in names:
-                alias_normalised = cls._normalise_branch(alias)
-                if normalised == alias_normalised:
-                    score = max(score, 100)
-                elif normalised.endswith(f"-{alias_normalised}") or normalised.startswith(f"{alias_normalised}-"):
-                    score = max(score, 70)
-            if score:
-                ranked.append((score, branch))
-        return sorted(ranked, key=lambda item: (-item[0], item[1]))
+    def _choose_branch_source(
+        self, local_branches: Sequence[str], remote_branches: Sequence[str]
+    ) -> tuple[str, ...]:
+        if set(local_branches) == set(remote_branches):
+            return tuple(local_branches)
+        if self.options.yes or not sys.stdin.isatty():
+            raise ShipError(
+                t(
+                    "error_branch_sets_differ",
+                    local=", ".join(local_branches),
+                    remote=", ".join(remote_branches),
+                )
+            )
+        common = sorted(set(local_branches) & set(remote_branches))
+        print(
+            t(
+                "explain_branch_sets_differ",
+                local=", ".join(local_branches) or "(none)",
+                remote=", ".join(remote_branches) or "(none)",
+            )
+        )
+        print(t("branch_source_options", common=", ".join(common) or "(none)"))
+        choice = self.tutor_prompt("", t("branch_source_prompt"))
+        if choice == "1":
+            return tuple(common)
+        if choice == "2":
+            return tuple(local_branches)
+        if choice == "3":
+            return tuple(remote_branches)
+        raise UserAborted(t("user_aborted"))
 
     def _resolve_branches(self) -> tuple[str, ...]:
-        configured = self.config["branches"]
+        configured = self.config.get("branches")
+        local_branches = self._local_branches()
         remote_branches = self._remote_branches()
+        available_branches = self._choose_branch_source(local_branches, remote_branches)
         if isinstance(configured, list):
-            missing = [branch for branch in configured if branch not in remote_branches]
-            if missing:
-                raise ShipError(
-                    "Configured branches do not exist on "
-                    f"{self.remote}: "
-                    + ", ".join(missing)
-                    + ". Available remote branches: "
-                    + ", ".join(remote_branches)
-                    + "."
-                )
-            resolved = tuple(configured)
-            print(f"Detected project: {self.project_name}; branches: {' → '.join(resolved)}")
-            return resolved
+            order = ",".join(configured)
+        elif isinstance(configured, dict) and any(configured.values()):
+            order = ",".join(value for value in configured.values() if value)
+            self._resolved_role_branches = {
+                role: configured.get(role)
+                for role in ("dev", "pre", "prod")
+                if configured.get(role)
+            }
+        else:
+            order = self.options.pipeline_order
 
-        aliases_config = self.config.get("branch_aliases", {})
-        resolved: dict[str, str] = {}
-        for role in ("dev", "pre", "prod"):
-            explicit = configured.get(role)
-            if explicit:
-                if explicit not in remote_branches:
-                    raise ShipError(f"Configured {role} branch {explicit!r} does not exist on {self.remote}.")
-                resolved[role] = explicit
+        if not order:
+            if self.options.yes or not sys.stdin.isatty():
+                raise ShipError(t("missing_config_need_branches", path=self.config_path))
+            print(t("explain_branch_order"))
+            for index, branch in enumerate(available_branches, start=1):
+                print(f"  {index}. {branch}")
+            order = self.tutor_prompt("", t("branches_prompt"))
+
+        pipeline: list[str] = []
+        for token in (part.strip() for part in order.split(",")):
+            if not token:
                 continue
-            aliases = aliases_config.get(role, self.DEFAULT_BRANCH_ALIASES[role])
-            ranked = self.rank_branch_candidates(role, remote_branches, aliases)
-            if not ranked:
-                raise ShipError(
-                    t(
-                        "error_branch_detection",
-                        role=role,
-                        available=", ".join(remote_branches),
-                        path=self.config_path,
+            if token.isdigit():
+                index = int(token) - 1
+                if index < 0 or index >= len(available_branches):
+                    raise ShipError(t("error_pipeline_number", token=token))
+                branch = available_branches[index]
+            else:
+                branch = token
+                if branch not in available_branches:
+                    raise ShipError(
+                        f"Branch {branch!r} is not in the selected branch set. "
+                        f"Available branches: {', '.join(available_branches)}."
                     )
-                )
-            top_score = ranked[0][0]
-            top = [branch for score, branch in ranked if score == top_score]
-            if len(top) != 1:
-                raise ShipError(
-                    t(
-                        "error_branch_ambiguous",
-                        role=role,
-                        candidates=", ".join(top),
-                        path=self.config_path,
-                    )
-                )
-            resolved[role] = top[0]
-        print(
-            f"Detected project: {self.project_name}; "
-            f"branches: {resolved['dev']} → {resolved['pre']} → {resolved['prod']}"
-        )
-        return resolved["dev"], resolved["pre"], resolved["prod"]
+            if branch not in pipeline:
+                pipeline.append(branch)
+        if not pipeline:
+            raise ShipError(t("error_pipeline_empty"))
+
+        if not isinstance(configured, list):
+            self._resolved_role_branches = (
+                {"prod": pipeline[0]}
+                if len(pipeline) == 1
+                else {"pre": pipeline[0], "prod": pipeline[-1]}
+                if len(pipeline) == 2
+                else {"dev": pipeline[0], "pre": pipeline[-2], "prod": pipeline[-1]}
+            )
+        print(f"Detected project: {self.project_name}; branches: {' → '.join(pipeline)}")
+        return tuple(pipeline)
 
     def _colour_enabled(self) -> bool:
         return colour_enabled(self.options.color, sys.stdout)

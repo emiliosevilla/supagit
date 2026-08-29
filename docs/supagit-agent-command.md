@@ -140,15 +140,16 @@ deleted only after verifying they are contained in `pipeline[0]`; if
 
 ## Configuration
 
-The legacy `branches` object can be configured explicitly or left with `null`
-values so the command detects `dev`, `pre`, and `prod` among remote branches.
-For any other number of stages, use an ordered `branches` list such as
-`["main"]` or `["dev", "qa", "production"]`. The command promotes adjacent
-entries from left to right and stops if a configured branch is absent or
-duplicated. The backend is configured under `backend`: use `provider: none` for
-a project without a database, or `provider: supabase` with environment-specific
-refs/variables. Supabase detection stops if it cannot identify exactly one ref
-for a configured target; it never guesses between projects.
+When `branches` is absent, supagit measures local and remote branches, asks how
+to handle any difference between them, and then asks which branches form the
+release pipeline and in what order. An explicit ordered `branches` list such as
+`["main"]` or `["dev", "qa", "production"]` is still supported. The command
+promotes adjacent entries from left to right and stops if a configured branch is
+absent or duplicated. The backend is configured under `backend`: use
+`provider: none` for a project without a database, or `provider: supabase` with
+environment-specific refs/variables. Supabase detection stops if it cannot
+identify exactly one ref for a configured target; it never guesses between
+projects.
 
 An optional `sweep` block in `.supagit.json` may document PR merge preferences
 (`pr_merge_method`, `require_gh`); when absent, behavior is merge via `gh` with

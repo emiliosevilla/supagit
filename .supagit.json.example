@@ -1,15 +1,5 @@
 {
   "remote": "origin",
-  "branches": {
-    "dev": null,
-    "pre": null,
-    "prod": null
-  },
-  "branch_aliases": {
-    "dev": ["dev", "develop", "development", "desarrollo", "work"],
-    "pre": ["pre", "preview", "staging", "stage", "qa", "beta"],
-    "prod": ["prod", "production", "produccion", "real", "live"]
-  },
   "backend": {
     "provider": "supabase",
     "cli": "supabase",

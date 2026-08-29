@@ -26,26 +26,33 @@ class BranchDiscoveryTests(unittest.TestCase):
     def setUp(self) -> None:
         MODULE.supagit_i18n.set_lang("en")
         os.environ[MODULE.supagit_update.SKIP_ENV] = "1"
-    def test_exact_alias_beats_prefixed_branch(self) -> None:
-        ranked = MODULE.Pipeline.rank_branch_candidates("dev", ["dev", "feature/dev"])
-        self.assertEqual(ranked[0], (100, "dev"))
+    def test_branch_order_is_requested_when_local_and_remote_match(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.config = {}
+        pipeline.config_path = Path("/proj/.supagit.json")
+        pipeline.remote = "origin"
+        pipeline.project_name = "proj"
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
+        pipeline._local_branches = lambda: ["dev", "feature/x", "main"]  # type: ignore[method-assign]
+        pipeline._remote_branches = lambda: ["dev", "feature/x", "main"]  # type: ignore[method-assign]
+        pipeline.tutor_prompt = lambda explanation, prompt: "dev,main"  # type: ignore[method-assign]
+        with patch("builtins.print"), patch("sys.stdin.isatty", return_value=True):
+            self.assertEqual(pipeline._resolve_branches(), ("dev", "main"))
 
-    def test_examples_from_other_projects_are_detected(self) -> None:
-        self.assertEqual(
-            MODULE.Pipeline.rank_branch_candidates("dev", ["work"])[0],
-            (100, "work"),
-        )
-        self.assertEqual(
-            MODULE.Pipeline.rank_branch_candidates("pre", ["preview"])[0],
-            (100, "preview"),
-        )
-        self.assertEqual(
-            MODULE.Pipeline.rank_branch_candidates("prod", ["production"])[0],
-            (100, "production"),
-        )
-
-    def test_unrelated_branches_are_not_candidates(self) -> None:
-        self.assertEqual(MODULE.Pipeline.rank_branch_candidates("prod", ["feature/login"]), [])
+    def test_branch_set_difference_asks_how_to_continue(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.config = {}
+        pipeline.config_path = Path("/proj/.supagit.json")
+        pipeline.remote = "origin"
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
+        pipeline.tutor_prompt = lambda explanation, prompt: "1"  # type: ignore[method-assign]
+        with patch("builtins.print"), patch("sys.stdin.isatty", return_value=True):
+            self.assertEqual(
+                pipeline._choose_branch_source(
+                    ["dev", "main"], ["dev", "main", "staging"]
+                ),
+                ("dev", "main"),
+            )
 
     def test_ordered_branch_list_is_valid(self) -> None:
         MODULE.Pipeline._validate_config(
@@ -428,6 +435,11 @@ class ProjectInitTests(unittest.TestCase):
         config = MODULE.init_project_config("none", "PRE_REF", "PROD_REF", ["main"])
         self.assertEqual(config["branches"], ["main"])
 
+    def test_init_config_has_no_preloaded_branch_configuration(self) -> None:
+        config = MODULE.init_project_config("none", "PRE_REF", "PROD_REF")
+        self.assertNotIn("branches", config)
+        self.assertNotIn("branch_aliases", config)
+
 
 class PromotionTargetTests(unittest.TestCase):
     def test_branch_specific_backend_target_is_selected(self) -> None:
@@ -510,7 +522,7 @@ class I18nAndUpdateTests(unittest.TestCase):
             self.assertIn('"provider": "none"', data)
             self.assertIn('"main"', data)
 
-    def test_auto_create_config_interactive_asks_branches(self) -> None:
+    def test_auto_create_config_does_not_preload_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".supagit.json"
             pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -524,19 +536,12 @@ class I18nAndUpdateTests(unittest.TestCase):
             )
             pipeline.root = Path(tmp)
 
-            def git(*args, **kwargs):
-                if args[:2] == ("branch", "--show-current"):
-                    return "topic\n"
-                raise AssertionError(args)
-
-            pipeline.git = git  # type: ignore[method-assign]
-            pipeline.tutor_prompt = lambda explanation, prompt: "main"  # type: ignore[method-assign]
             with patch("builtins.print"), patch("sys.stdin.isatty", return_value=True):
                 pipeline._auto_create_config(path)
             config = __import__("json").loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(config["branches"], ["main"])
+            self.assertNotIn("branches", config)
 
-    def test_auto_create_config_yes_without_pipeline_fails(self) -> None:
+    def test_auto_create_config_yes_without_pipeline_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".supagit.json"
             pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
@@ -550,9 +555,8 @@ class I18nAndUpdateTests(unittest.TestCase):
             )
             pipeline.root = Path(tmp)
             with patch("builtins.print"):
-                with self.assertRaises(MODULE.ShipError) as ctx:
-                    pipeline._auto_create_config(path)
-            self.assertIn("--pipeline", str(ctx.exception))
+                pipeline._auto_create_config(path)
+            self.assertTrue(path.is_file())
 
     def test_auto_create_config_refuses_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1586,28 +1590,23 @@ class CheckoutFlexTests(unittest.TestCase):
         self.assertEqual(code, 0)
         mocked_input.assert_not_called()
 
-    def test_legacy_branch_detection_names_config_path(self) -> None:
+    def test_legacy_backend_targets_follow_detected_branches(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
-        pipeline.config = {
+        pipeline._resolved_role_branches = {"dev": "dev", "prod": "main"}
+        config = {
             "branches": {"dev": None, "pre": None, "prod": None},
-            "branch_aliases": {},
+            "backend": {
+                "provider": "supabase",
+                "environments": {
+                    "dev": {"project_ref": "dev-ref"},
+                    "pre": {"project_ref": "pre-ref"},
+                    "prod": {"project_ref": "prod-ref"},
+                },
+            },
         }
-        pipeline.config_path = Path("/proj/.supagit.json")
-        pipeline.remote = "origin"
-        pipeline.project_name = "proj"
-        pipeline.DEFAULT_BRANCH_ALIASES = MODULE.Pipeline.DEFAULT_BRANCH_ALIASES
-
-        def remote_branches():
-            return ["main", "feature/x"]
-
-        pipeline._remote_branches = remote_branches  # type: ignore[method-assign]
         with patch("builtins.print"):
-            with self.assertRaises(MODULE.ShipError) as ctx:
-                pipeline._resolve_branches()
-        text = str(ctx.exception)
-        self.assertIn(".supagit.json", text)
-        self.assertIn("branches", text)
-        self.assertIn("supagit init --branches", text)
+            backend = pipeline._resolve_backend_from_config(config)
+        self.assertEqual(backend.targets, {"dev": "dev-ref", "main": "prod-ref"})
 
     def test_contained_integrate_names_rederived_base(self) -> None:
         inv = MODULE.supagit_inventory.RepoInventory(

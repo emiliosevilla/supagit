@@ -44,8 +44,9 @@ supagit init --backend none
 ```
 
 For a project with Supabase migrations, use `--backend supabase` instead.
-`supagit` detects the usual `dev`, `pre`, and `prod` pipeline. Any ordered
-pipeline can be configured, for example:
+`supagit` measures local and remote branches, then asks you which ones form the
+release pipeline and in what order. An ordered pipeline can also be configured
+explicitly, for example:
 
 ```json
 "branches": ["dev", "staging", "production"]
