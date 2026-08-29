@@ -206,6 +206,36 @@ class MigrationStateTests(unittest.TestCase):
         remote = supagit_supabase.parse_migration_list_remote(output)
         self.assertEqual(remote, {"20240101000000", "20240202000000"})
 
+    def test_parse_ascii_table_with_backticks(self) -> None:
+        output = (
+            "LOCAL | REMOTE | TIME (UTC)\n"
+            "------|--------|-----------\n"
+            "`20240101000000` | `20240101000000` | `2024-01-01 00:00:00`\n"
+            "` ` | `20240202000000` | `2024-02-02 00:00:00`\n"
+        )
+        remote = supagit_supabase.parse_migration_list_remote(output)
+        self.assertEqual(remote, {"20240101000000", "20240202000000"})
+
+    def test_parse_json_migration_rows(self) -> None:
+        output = (
+            '{"message":"Migrations listed","data":{"migrations":['
+            '{"local":"20240101000000","remote":"20240101000000","time":"2024-01-01"},'
+            '{"local":"","remote":"20240202000000","time":"2024-02-02"}'
+            ']}}'
+        )
+        remote = supagit_supabase.parse_migration_list_remote(output)
+        self.assertEqual(remote, {"20240101000000", "20240202000000"})
+
+    def test_parse_stream_json_migration_rows(self) -> None:
+        output = (
+            '{"type":"progress"}\n'
+            '{"type":"result","data":{"migrations":['
+            '{"local":"","remote":"20240303000000","time":"2024-03-03"}'
+            ']}}\n'
+        )
+        remote = supagit_supabase.parse_migration_list_remote(output)
+        self.assertEqual(remote, {"20240303000000"})
+
     def test_assert_migration_state_matches_detects_drift(self) -> None:
         with self.assertRaises(supagit_supabase.SupabaseError) as ctx:
             supagit_supabase.assert_migration_state_matches(

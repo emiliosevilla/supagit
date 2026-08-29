@@ -600,7 +600,9 @@ class Pipeline:
                 continue
             raw_value = values.get(env_name)
             if not raw_value:
-                raise ShipError(f"Environment variable {env_name} for Supabase {role} is not set.")
+                raise ShipError(
+                    t("error_supabase_env_missing", env_name=env_name, role=role)
+                )
             ref = self._project_ref_from_value(raw_value)
             if ref:
                 return ref

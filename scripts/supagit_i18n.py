@@ -72,6 +72,12 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "aborting before any code merge. Local-only: {local_only}. "
             "Remote-only: {remote_only}."
         ),
+        "error_supabase_env_missing": (
+            "Environment variable {env_name} for Supabase {role} is not set. Supagit reads "
+            "the variable named in .supagit.json; VITE_SUPABASE_* is not a substitute "
+            "unless configured explicitly. Set it before rerunning, for example: "
+            "export {env_name}=your-project-ref, or add {env_name}=your-project-ref to .env.local."
+        ),
         "explain_promote": (
             "This merges {source} into {target} on the remote and publishes {target}."
         ),
@@ -558,6 +564,12 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Las migraciones remotas de {label} no coinciden con supabase/migrations "
             "local; se aborta antes de fusionar código. Solo local: {local_only}. "
             "Solo remoto: {remote_only}."
+        ),
+        "error_supabase_env_missing": (
+            "La variable {env_name} de Supabase ({role}) no está definida. Supagit lee "
+            "la variable indicada en .supagit.json; VITE_SUPABASE_* no la sustituye "
+            "salvo que la configures explícitamente. Defínela antes de repetir, por ejemplo: "
+            "export {env_name}=tu-project-ref, o añade {env_name}=tu-project-ref a .env.local."
         ),
         "explain_promote": (
             "Esto fusionará {source} en {target} en el remoto y publicará {target}."

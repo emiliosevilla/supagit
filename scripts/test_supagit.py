@@ -391,6 +391,20 @@ class BackendDiscoveryTests(unittest.TestCase):
         self.assertEqual(backend.provider, "supabase")
         self.assertEqual(backend.targets, {"pre": "testing-ref", "prod": "production-ref"})
 
+    def test_missing_supabase_env_explains_how_to_set_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.pipeline.root = Path(directory)
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(
+                    MODULE.ShipError,
+                    r"SUPABASE_DEV_PROJECT_REF.*export SUPABASE_DEV_PROJECT_REF=your-project-ref.*\.env\.local",
+                ):
+                    self.pipeline._resolve_supabase_target(
+                        "dev",
+                        {"project_ref_env": "SUPABASE_DEV_PROJECT_REF"},
+                        True,
+                    )
+
 
 class ProjectInitTests(unittest.TestCase):
     def test_none_backend_config_contains_no_supabase_targets(self) -> None:
@@ -700,6 +714,8 @@ class I18nAndUpdateTests(unittest.TestCase):
             cmd = list(args)
             if cmd[:3] == ["git", "remote", "get-url"]:
                 return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "show"]:
+                return update.BUILD_STAMP
             if cmd[:2] == ["git", "fetch"]:
                 return ""
             if "rev-list" in cmd:
@@ -800,6 +816,8 @@ class I18nAndUpdateTests(unittest.TestCase):
             cmd = list(args)
             if cmd[:3] == ["git", "remote", "get-url"]:
                 return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "show"]:
+                return update.BUILD_STAMP
             if cmd[:2] == ["git", "fetch"]:
                 return ""
             if "rev-list" in cmd:
@@ -894,6 +912,8 @@ class I18nAndUpdateTests(unittest.TestCase):
             cmd = list(args)
             if cmd[:3] == ["git", "remote", "get-url"]:
                 return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "show"]:
+                return update.BUILD_STAMP
             if cmd[:2] == ["git", "fetch"]:
                 return ""
             if "rev-list" in cmd:
@@ -1290,6 +1310,8 @@ class I18nAndUpdateTests(unittest.TestCase):
             cmd = list(args)
             if cmd[:3] == ["git", "remote", "get-url"]:
                 return "https://github.com/emiliosevilla/supagit.git"
+            if cmd[:2] == ["git", "show"]:
+                return update.BUILD_STAMP
             if cmd[:2] == ["git", "fetch"]:
                 return ""
             if "rev-list" in cmd:
@@ -1482,6 +1504,7 @@ class CheckoutFlexTests(unittest.TestCase):
 
     def test_resolve_layout_not_git_repo(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
 
         def boom(cwd=None, **_kwargs):
             raise MODULE.supagit_layout.LayoutError(
@@ -1495,6 +1518,7 @@ class CheckoutFlexTests(unittest.TestCase):
 
     def test_resolve_layout_unsupported(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
         detail = "Unsupported git common dir layout: /bare.git"
 
         def boom(cwd=None, **_kwargs):

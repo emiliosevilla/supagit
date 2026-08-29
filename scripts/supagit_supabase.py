@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -48,22 +49,58 @@ def local_migration_versions(migrations_dir: Path) -> set[str]:
 
 
 def parse_migration_list_remote(output: str) -> set[str]:
-    """Parse remote versions from ``supabase migration list`` table output."""
+    """Parse remote versions from Supabase text, JSON, or stream-JSON output."""
+
+    def version_from_cell(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip().strip("`'\"").strip()
+        match = _VERSION_RE.match(cleaned)
+        return match.group(1) if match else None
+
+    def json_remote_versions(value: object, versions: set[str]) -> None:
+        if isinstance(value, dict):
+            version = version_from_cell(value.get("remote"))
+            if version:
+                versions.add(version)
+            for child in value.values():
+                json_remote_versions(child, versions)
+        elif isinstance(value, list):
+            for child in value:
+                json_remote_versions(child, versions)
+
+    json_documents: list[object] = []
+    try:
+        json_documents.append(json.loads(output))
+    except json.JSONDecodeError:
+        # stream-json emits one valid document per line.
+        for line in output.splitlines():
+            try:
+                json_documents.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    if json_documents:
+        remote: set[str] = set()
+        for document in json_documents:
+            json_remote_versions(document, remote)
+        return remote
+
     remote: set[str] = set()
     for line in output.splitlines():
-        if "│" not in line:
+        delimiter = "│" if "│" in line else "|" if "|" in line else None
+        if delimiter is None:
             continue
-        parts = [part.strip() for part in line.split("│")]
+        parts = [part.strip() for part in line.split(delimiter)]
         if len(parts) < 2:
             continue
         local_cell, remote_cell = parts[0], parts[1]
         if local_cell.upper() == "LOCAL" or remote_cell.upper() == "REMOTE":
             continue
-        if "─" in local_cell or "─" in remote_cell:
+        if all(character in "─-" for character in local_cell + remote_cell):
             continue
-        match = _VERSION_RE.match(remote_cell)
-        if match:
-            remote.add(match.group(1))
+        version = version_from_cell(remote_cell)
+        if version:
+            remote.add(version)
     return remote
 
 
