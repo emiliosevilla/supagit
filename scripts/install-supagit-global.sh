@@ -3,6 +3,7 @@ set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 global_skill_dir="${HOME}/.agents/skills/supagit"
+codex_skill_dir="${HOME}/.codex/skills/supagit"
 global_bin_dir="${HOME}/.local/bin"
 global_claude_commands="${HOME}/.claude/commands"
 legacy_skill_dir="${HOME}/.agents/skills/gitgitgit"
@@ -196,7 +197,7 @@ case "$origin_norm" in
     ;;
 esac
 
-mkdir -p "$global_skill_dir" "$global_bin_dir" "$global_claude_commands"
+mkdir -p "$global_skill_dir" "$codex_skill_dir" "$global_bin_dir" "$global_claude_commands"
 
 # Remove only the previous generated supagit artifacts. No project data is touched.
 rm -f "$legacy_bin" "$legacy_command" \
@@ -216,6 +217,7 @@ install -m 644 "$repo_root/scripts/supagit_situation.py" "$global_skill_dir/supa
 install -m 644 "$repo_root/scripts/supagit_supabase.py" "$global_skill_dir/supagit_supabase.py"
 install -m 755 "$repo_root/scripts/supagit" "$global_skill_dir/supagit"
 install -m 644 "$repo_root/docs/supagit-agent-command.md" "$global_skill_dir/SKILL.md"
+install -m 644 "$repo_root/docs/supagit-agent-command.md" "$codex_skill_dir/SKILL.md"
 printf '%s\n' "$repo_root" > "$source_marker"
 
 # Update decisions live entirely in Python (maybe_self_update_and_reexec /

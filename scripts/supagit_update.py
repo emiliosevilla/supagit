@@ -125,12 +125,17 @@ def installed_copy_is_stale(source_root: Path, home: Path | None = None) -> bool
         except OSError:
             return True
     skill_source = source_root / "docs" / "supagit-agent-command.md"
-    skill_target = installed / "SKILL.md"
+    skill_targets = (
+        installed / "SKILL.md",
+        base / ".codex" / "skills" / "supagit" / "SKILL.md",
+    )
     try:
-        return (
-            not skill_source.is_file()
-            or not skill_target.is_file()
-            or skill_source.read_bytes() != skill_target.read_bytes()
+        if not skill_source.is_file():
+            return True
+        source_bytes = skill_source.read_bytes()
+        return any(
+            not target.is_file() or source_bytes != target.read_bytes()
+            for target in skill_targets
         )
     except OSError:
         return True

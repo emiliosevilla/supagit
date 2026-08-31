@@ -629,12 +629,15 @@ class I18nAndUpdateTests(unittest.TestCase):
             installed = home / ".agents" / "skills" / "supagit"
             scripts.mkdir(parents=True)
             installed.mkdir(parents=True)
+            codex_skill = home / ".codex" / "skills" / "supagit"
+            codex_skill.mkdir(parents=True)
             for name in update.INSTALLED_FILES:
                 (scripts / name).write_text(f"source:{name}\n", encoding="utf-8")
                 (installed / name).write_text(f"source:{name}\n", encoding="utf-8")
             (source / "docs").mkdir()
             (source / "docs" / "supagit-agent-command.md").write_text("skill\n", encoding="utf-8")
             (installed / "SKILL.md").write_text("skill\n", encoding="utf-8")
+            (codex_skill / "SKILL.md").write_text("skill\n", encoding="utf-8")
 
             self.assertFalse(update.installed_copy_is_stale(source, home=home))
             (installed / "supagit_update.py").write_text("old\n", encoding="utf-8")
@@ -1186,6 +1189,10 @@ class I18nAndUpdateTests(unittest.TestCase):
             self.assertTrue(
                 (skill / "supagit_supabase.py").is_file(),
                 "installer must copy supagit_supabase.py into the global skill dir",
+            )
+            self.assertEqual(
+                (home / ".codex" / "skills" / "supagit" / "SKILL.md").read_text(encoding="utf-8"),
+                real_docs.read_text(encoding="utf-8"),
             )
             import_probe = subprocess.run(
                 [

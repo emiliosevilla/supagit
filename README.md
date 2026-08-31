@@ -64,8 +64,9 @@ Install the global command from any directory:
 curl -fsSL https://raw.githubusercontent.com/emiliosevilla/supagit/main/scripts/bootstrap.sh | sh
 ```
 
-The installer downloads the source, installs the global command and agent
-skill, and adds `~/.local/bin` to `PATH` when needed. Use `--lang es` for
+The installer downloads the source, installs the global command and the skill
+under both `~/.agents/skills/supagit` and `~/.codex/skills/supagit`, and adds
+`~/.local/bin` to `PATH` when needed. Use `--lang es` for
 Spanish installer messages; the command itself supports English and Spanish.
 
 ## How to uninstall it
@@ -75,6 +76,7 @@ Remove the global command, skill, and agent command:
 ```bash
 rm -f "$HOME/.local/bin/supagit" "$HOME/.claude/commands/supagit.md"
 rm -rf "$HOME/.agents/skills/supagit"
+rm -rf "$HOME/.codex/skills/supagit"
 ```
 
 If you installed with the bootstrap script, also remove its downloaded source
