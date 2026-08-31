@@ -140,12 +140,14 @@ deleted only after verifying they are contained in `pipeline[0]`; if
 
 ## Configuration
 
-When `branches` is absent, supagit measures local and remote branches, asks how
-to handle any difference between them, and then asks which branches form the
-release pipeline and in what order. An explicit ordered `branches` list such as
-`["main"]` or `["dev", "qa", "production"]` is still supported. The command
-promotes adjacent entries from left to right and stops if a configured branch is
-absent or duplicated. The backend is configured under `backend`: use
+Supagit measures local and remote branches, asks how to handle any difference
+between them, and then asks which branches form the release pipeline and in
+what order. It rewrites that project's `.supagit.json` with the selected branch
+names and Supabase target keys, preserving independent settings such as
+`remote`, `checks`, and `sweep`. Legacy `branches` and alias settings are
+migrated away and cannot select a pipeline. The command promotes adjacent
+entries from left to right and stops if a selected branch is absent or
+duplicated. The backend is configured under `backend`: use
 `provider: none` for a project without a database, or `provider: supabase` with
 environment-specific refs/variables. Supabase detection stops if it cannot
 identify exactly one ref for a configured target; it never guesses between

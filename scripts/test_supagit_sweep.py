@@ -3213,25 +3213,21 @@ class OrchestrationTests(unittest.TestCase):
             order.index("promote:pre:prod"),
         )
 
-    def test_init_keys_environments_by_pipeline_branch_names(self) -> None:
-        """Custom pipeline branches become environment keys (not legacy pre/prod)."""
-        config = ENGINE.init_project_config(
-            "supabase",
-            "SUPABASE_PRE_PROJECT_REF",
-            "SUPABASE_PROD_PROJECT_REF",
-            ["main", "production"],
+    def test_normalise_keys_environments_by_measured_branch_names(self) -> None:
+        """Custom pipeline branches replace legacy pre/prod environment keys."""
+        config = ENGINE.normalise_project_config(
+            ENGINE.init_project_config("supabase"), ("main", "production")
         )
-        self.assertEqual(config["branches"], ["main", "production"])
         envs = config["backend"]["environments"]
         self.assertIn("main", envs)
         self.assertIn("production", envs)
         self.assertNotIn("pre", envs)
         self.assertNotIn("prod", envs)
         self.assertEqual(
-            envs["main"]["project_ref_env"], "SUPABASE_PRE_PROJECT_REF"
+            envs["main"]["project_ref_env"], "SUPABASE_MAIN_PROJECT_REF"
         )
         self.assertEqual(
-            envs["production"]["project_ref_env"], "SUPABASE_PROD_PROJECT_REF"
+            envs["production"]["project_ref_env"], "SUPABASE_PRODUCTION_PROJECT_REF"
         )
 
     def test_custom_pipeline_main_production_migrates_production(self) -> None:

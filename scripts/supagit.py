@@ -8,6 +8,7 @@ deployment commands. A project may use Supabase or no backend at all.
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import datetime
 import json
 import os
@@ -129,53 +130,11 @@ def confirm_default_yes(message: str, *, colour_on: bool) -> None:
     raise UserAborted(t("user_aborted"))
 
 
-def _environment_keys_for_pipeline(branch_names: Sequence[str] | None) -> list[str]:
-    """Environment keys follow real pipeline branch names (or legacy role names)."""
-    if branch_names:
-        return [name.strip() for name in branch_names if name and str(name).strip()]
-    return ["dev", "pre", "prod"]
-
-
-def _environments_for_pipeline(
-    branch_names: Sequence[str] | None,
-    pre_ref_env: str,
-    prod_ref_env: str,
-) -> dict[str, dict[str, str]]:
-    """Key Supabase environments by pipeline branch names, not fixed pre/prod labels."""
-    names = _environment_keys_for_pipeline(branch_names)
-    if not names:
-        names = ["dev", "pre", "prod"]
-    if len(names) == 1:
-        return {names[0]: {"project_ref_env": prod_ref_env}}
-    if len(names) == 2:
-        return {
-            names[0]: {"project_ref_env": pre_ref_env},
-            names[1]: {"project_ref_env": prod_ref_env},
-        }
-    environments: dict[str, dict[str, str]] = {}
-    for index, name in enumerate(names):
-        if index == len(names) - 2:
-            environments[name] = {"project_ref_env": pre_ref_env}
-        elif index == len(names) - 1:
-            environments[name] = {"project_ref_env": prod_ref_env}
-        else:
-            token = re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_") or "APP"
-            environments[name] = {"project_ref_env": f"SUPABASE_{token}_PROJECT_REF"}
-    return environments
-
-
-def init_project_config(
-    backend: str,
-    pre_ref_env: str,
-    prod_ref_env: str,
-    branch_names: Sequence[str] | None = None,
-) -> dict:
+def init_project_config(backend: str) -> dict:
     config = {
         "remote": "origin",
         "checks": [],
     }
-    if branch_names:
-        config["branches"] = list(branch_names)
     if backend == "none":
         config["backend"] = {"provider": "none"}
     else:
@@ -183,11 +142,64 @@ def init_project_config(
             "provider": "supabase",
             "cli": "supabase",
             "auto_detect": True,
-            "environments": _environments_for_pipeline(
-                branch_names, pre_ref_env, prod_ref_env
-            ),
+            "environments": {},
         }
     return config
+
+
+def _environment_candidates(branches: Sequence[str], index: int) -> tuple[str, ...]:
+    branch = branches[index]
+    if len(branches) == 1:
+        return (branch, "prod")
+    if index == 0:
+        return (branch, "dev", "pre")
+    if index == len(branches) - 1:
+        return (branch, "prod")
+    if index == len(branches) - 2:
+        return (branch, "pre")
+    return (branch,)
+
+
+def _default_environment_target(branches: Sequence[str], index: int) -> dict[str, str]:
+    token = re.sub(r"[^A-Z0-9]+", "_", branches[index].upper()).strip("_") or "APP"
+    return {"project_ref_env": f"SUPABASE_{token}_PROJECT_REF"}
+
+
+def normalise_project_config(config: dict, branches: Sequence[str]) -> dict:
+    """Keep user settings while regenerating branch-derived configuration."""
+    result = copy.deepcopy(config)
+    result.pop("branches", None)
+    result.pop("branch_aliases", None)
+    backend = result.get("backend")
+    if backend is None and isinstance(result.get("supabase"), dict):
+        legacy = result.pop("supabase")
+        backend = {
+            "provider": "supabase",
+            "cli": legacy.get("cli", "supabase"),
+            "auto_detect": True,
+            "environments": {
+                "pre": {"project_ref": legacy["pruebas_project_ref"]},
+                "prod": {"project_ref": legacy["prod_project_ref"]},
+            },
+        }
+        result["backend"] = backend
+    if not isinstance(backend, dict) or backend.get("provider") != "supabase":
+        return result
+
+    environments = backend.get("environments", {})
+    canonical: dict[str, dict] = {}
+    for index, branch in enumerate(branches):
+        target = next(
+            (
+                environments[name]
+                for name in _environment_candidates(branches, index)
+                if isinstance(environments.get(name), dict)
+            ),
+            _default_environment_target(branches, index),
+        )
+        canonical[branch] = copy.deepcopy(target)
+    backend["environments"] = canonical
+    return result
 
 
 def git_root_for_init() -> Path:
@@ -222,8 +234,6 @@ def init_tutor_prompt(
 def initialise_project(args: argparse.Namespace, options: Options) -> int:
     if args.config is not None:
         raise ShipError("--config cannot be used with supagit init.")
-    if args.backend == "none" and (args.pre_ref_env or args.prod_ref_env):
-        raise ShipError("--pre-ref-env and --prod-ref-env only apply to --backend supabase.")
 
     root = git_root_for_init()
     config_path = root / ".supagit.json"
@@ -245,29 +255,7 @@ def initialise_project(args: argparse.Namespace, options: Options) -> int:
     if backend not in {"none", "supabase"}:
         raise ShipError("Backend must be 'none' or 'supabase'.")
 
-    pre_ref_env = args.pre_ref_env or "SUPABASE_PRE_PROJECT_REF"
-    prod_ref_env = args.prod_ref_env or "SUPABASE_PROD_PROJECT_REF"
-    if backend == "supabase" and args.pre_ref_env is None and sys.stdin.isatty():
-        pre_ref_env = init_tutor_prompt(
-            "Environment variable name holding the Supabase pre/staging project ref.",
-            f"Variable for Supabase pre project ref ({pre_ref_env}): ",
-            options.color,
-            yes=options.yes,
-        ) or pre_ref_env
-    if backend == "supabase" and args.prod_ref_env is None and sys.stdin.isatty():
-        prod_ref_env = init_tutor_prompt(
-            "Environment variable name holding the Supabase production project ref.",
-            f"Variable for Supabase prod project ref ({prod_ref_env}): ",
-            options.color,
-            yes=options.yes,
-        ) or prod_ref_env
-
-    branch_names = None
-    if args.branches:
-        branch_names = [branch.strip() for branch in args.branches.split(",") if branch.strip()]
-        if not branch_names or len(set(branch_names)) != len(branch_names):
-            raise ShipError("--branches must contain one or more unique comma-separated branch names.")
-    config = init_project_config(backend, pre_ref_env, prod_ref_env, branch_names)
+    config = init_project_config(backend)
     rendered = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
     if options.dry_run:
         print(f"DRY-RUN: would create {config_path}")
@@ -306,6 +294,7 @@ class Pipeline:
         ).strip()
         self.project_name = self._project_name()
         self.branches = self._resolve_branches()
+        self._normalise_config()
         self.backend = self._resolve_backend()
         self.cli = self.backend.cli
         self.dev = self.branches[0]
@@ -339,6 +328,31 @@ class Pipeline:
         self.config_path = path
         return config
 
+    def _normalise_config(self) -> None:
+        config = normalise_project_config(self.config, self.branches)
+        rendered = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
+        try:
+            current = self.config_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ShipError(f"Cannot read configuration {self.config_path}: {exc}") from exc
+        self.config = config
+        if current == rendered:
+            return
+        if self.options.dry_run:
+            print(t("dry_run_config_sync", path=self.config_path))
+            return
+        temporary = self.config_path.with_name(f".{self.config_path.name}.tmp")
+        try:
+            temporary.write_text(rendered, encoding="utf-8")
+            os.replace(temporary, self.config_path)
+        except OSError as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise ShipError(f"Cannot update configuration {self.config_path}: {exc}") from exc
+        print(t("config_synced", path=self.config_path))
+
     def _auto_create_config(self, path: Path) -> None:
         print(t("missing_config_creating", path=path))
         backend = self.options.backend
@@ -350,18 +364,8 @@ class Pipeline:
             ).lower()
         if backend not in {"none", "supabase"}:
             raise ShipError(t("backend_invalid"))
-        branch_names = None
-        if self.options.pipeline_order:
-            branch_names = [
-                part.strip()
-                for part in self.options.pipeline_order.split(",")
-                if part.strip()
-            ]
         config = init_project_config(
             backend,
-            "SUPABASE_PRE_PROJECT_REF",
-            "SUPABASE_PROD_PROJECT_REF",
-            branch_names,
         )
         rendered = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
         try:
@@ -444,17 +448,12 @@ class Pipeline:
         backend = config.get("backend")
         if backend is None:
             supabase = config["supabase"]
-            role_branches = getattr(self, "_resolved_role_branches", None)
             return BackendConfig(
                 provider="supabase",
                 cli=supabase.get("cli", "supabase"),
                 targets={
-                    role_branches.get(role, role) if role_branches is not None else role: ref
-                    for role, ref in (
-                        ("pre", supabase["pruebas_project_ref"]),
-                        ("prod", supabase["prod_project_ref"]),
-                    )
-                    if role_branches is None or role in role_branches
+                    "pre": supabase["pruebas_project_ref"],
+                    "prod": supabase["prod_project_ref"],
                 },
             )
 
@@ -465,16 +464,9 @@ class Pipeline:
 
         environments = backend.get("environments", {})
         auto_detect = backend.get("auto_detect", True)
-        role_branches = (
-            getattr(self, "_resolved_role_branches", None)
-            if not isinstance(config.get("branches"), list)
-            else None
-        )
         targets = {
-            role_branches.get(role, role) if role_branches is not None else role:
-            self._resolve_supabase_target(role, target, auto_detect)
-            for role, target in environments.items()
-            if role_branches is None or role in role_branches
+            branch: self._resolve_supabase_target(branch, target, auto_detect)
+            for branch, target in environments.items()
         }
         if targets:
             print("Backend: Supabase; targets resolved for " + ", ".join(targets))
@@ -660,21 +652,10 @@ class Pipeline:
         raise UserAborted(t("user_aborted"))
 
     def _resolve_branches(self) -> tuple[str, ...]:
-        configured = self.config.get("branches")
         local_branches = self._local_branches()
         remote_branches = self._remote_branches()
         available_branches = self._choose_branch_source(local_branches, remote_branches)
-        if isinstance(configured, list):
-            order = ",".join(configured)
-        elif isinstance(configured, dict) and any(configured.values()):
-            order = ",".join(value for value in configured.values() if value)
-            self._resolved_role_branches = {
-                role: configured.get(role)
-                for role in ("dev", "pre", "prod")
-                if configured.get(role)
-            }
-        else:
-            order = self.options.pipeline_order
+        order = self.options.pipeline_order
 
         if not order:
             if self.options.yes or not sys.stdin.isatty():
@@ -705,14 +686,6 @@ class Pipeline:
         if not pipeline:
             raise ShipError(t("error_pipeline_empty"))
 
-        if not isinstance(configured, list):
-            self._resolved_role_branches = (
-                {"prod": pipeline[0]}
-                if len(pipeline) == 1
-                else {"pre": pipeline[0], "prod": pipeline[-1]}
-                if len(pipeline) == 2
-                else {"dev": pipeline[0], "pre": pipeline[-2], "prod": pipeline[-1]}
-            )
         print(f"Detected project: {self.project_name}; branches: {' → '.join(pipeline)}")
         return tuple(pipeline)
 
@@ -1780,23 +1753,12 @@ class Pipeline:
                         ask_continue=False,
                     )
                     integrate_line = "none"
-                default_chain = " → ".join(self.branches)
-                if len(pipeline_branches) <= 1 and not self.options.pipeline_order:
-                    only = (
-                        pipeline_branches[0].name
-                        if pipeline_branches
-                        else (self.branches[0] if self.branches else base)
-                    )
+                if len(self.branches) == 1:
                     self.explain(
-                        t("explain_pipeline_single", branch=only),
+                        t("explain_pipeline_single", branch=self.branches[0]),
                         ask_continue=False,
                     )
-                    pipeline_line = only
-                else:
-                    pipeline_line = self.tutor_prompt(
-                        t("explain_pipeline_order"),
-                        t("pipeline_order_prompt", default=default_chain),
-                    )
+                pipeline_line = ",".join(self.branches)
                 selection = self._resolve_selection(
                     inventory,
                     pipeline_line,
@@ -2343,9 +2305,6 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, Options]:
     parser.add_argument("--yes", action="store_true", help="Skip confirmations; use only with explicit authorization.")
     parser.add_argument("-m", "--message", help="Initial commit message for the first pipeline branch; required with --yes when changes exist.")
     parser.add_argument("--backend", choices=("none", "supabase"), help="Backend for `supagit init` or auto-init when `.supagit.json` is missing.")
-    parser.add_argument("--branches", help="Comma-separated ordered branches for `supagit init`.")
-    parser.add_argument("--pre-ref-env", help="Environment variable name for the Supabase pre project ref.")
-    parser.add_argument("--prod-ref-env", help="Environment variable name for the Supabase prod project ref.")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto", help="Confirmation color: auto, always, or never.")
     parser.add_argument("--no-color", action="store_true", help="Use --color never.")
     parser.add_argument("--lang", choices=("en", "es"), help="UI language: en or es.")

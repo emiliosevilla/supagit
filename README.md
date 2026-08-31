@@ -45,12 +45,11 @@ supagit init --backend none
 
 For a project with Supabase migrations, use `--backend supabase` instead.
 `supagit` measures local and remote branches, then asks you which ones form the
-release pipeline and in what order. An ordered pipeline can also be configured
-explicitly, for example:
-
-```json
-"branches": ["dev", "staging", "production"]
-```
+release pipeline and in what order. It rewrites that project's `.supagit.json`
+with the measured branch names and Supabase target keys, while keeping options
+such as `remote`, `checks`, and `sweep`. Old `branches` and alias settings are
+migrated away, so they cannot force a pipeline from another project. Use
+`--pipeline dev,staging,production` only for an explicit non-interactive run.
 
 The command is interactive by default. Useful options include `--yes`,
 `--lang`, `--pipeline`, `--integrate`, and `--no-sweep`. Pull-request paths

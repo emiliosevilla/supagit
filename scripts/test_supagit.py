@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -54,7 +55,20 @@ class BranchDiscoveryTests(unittest.TestCase):
                 ("dev", "main"),
             )
 
-    def test_ordered_branch_list_is_valid(self) -> None:
+    def test_legacy_preloaded_branch_object_is_ignored(self) -> None:
+        pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+        pipeline.config = {"branches": {"dev": "dev", "pre": "pre", "prod": "prod"}}
+        pipeline.config_path = Path("/proj/.supagit.json")
+        pipeline.remote = "origin"
+        pipeline.project_name = "proj"
+        pipeline.options = MODULE.Options(False, False, None, None, "never")
+        pipeline._local_branches = lambda: ["dev", "main"]  # type: ignore[method-assign]
+        pipeline._remote_branches = lambda: ["dev", "main"]  # type: ignore[method-assign]
+        pipeline.tutor_prompt = lambda explanation, prompt: "dev,main"  # type: ignore[method-assign]
+        with patch("builtins.print"), patch("sys.stdin.isatty", return_value=True):
+            self.assertEqual(pipeline._resolve_branches(), ("dev", "main"))
+
+    def test_legacy_ordered_branch_list_is_accepted_for_migration(self) -> None:
         MODULE.Pipeline._validate_config(
             {"branches": ["main", "production"], "backend": {"provider": "none"}},
             Path(".supagit.json"),
@@ -415,30 +429,75 @@ class BackendDiscoveryTests(unittest.TestCase):
 
 class ProjectInitTests(unittest.TestCase):
     def test_none_backend_config_contains_no_supabase_targets(self) -> None:
-        config = MODULE.init_project_config("none", "PRE_REF", "PROD_REF")
+        config = MODULE.init_project_config("none")
         self.assertEqual(config["backend"], {"provider": "none"})
         self.assertNotIn("supabase", config)
 
-    def test_supabase_init_config_contains_variable_names_only(self) -> None:
-        config = MODULE.init_project_config("supabase", "MY_PRE_REF", "MY_PROD_REF")
+    def test_supabase_init_config_defers_targets_until_branches_are_measured(self) -> None:
+        config = MODULE.init_project_config("supabase")
         self.assertEqual(config["backend"]["provider"], "supabase")
+        self.assertEqual(config["backend"]["environments"], {})
+
+    def test_init_config_has_no_preloaded_branch_configuration(self) -> None:
+        config = MODULE.init_project_config("none")
+        self.assertNotIn("branches", config)
+        self.assertNotIn("branch_aliases", config)
+
+    def test_normalise_config_rewrites_legacy_branch_settings(self) -> None:
+        source = {
+            "remote": "upstream",
+            "checks": ["npm test"],
+            "branches": {"dev": "dev", "pre": "pre", "prod": "prod"},
+            "branch_aliases": {"prod": "main"},
+            "backend": {
+                "provider": "supabase",
+                "environments": {
+                    "dev": {"project_ref": "dev-ref"},
+                    "pre": {"project_ref": "pre-ref"},
+                    "prod": {"project_ref": "prod-ref"},
+                },
+            },
+        }
+        config = MODULE.normalise_project_config(source, ("dev", "main"))
+        self.assertNotIn("branches", config)
+        self.assertNotIn("branch_aliases", config)
+        self.assertEqual(config["remote"], "upstream")
+        self.assertEqual(config["checks"], ["npm test"])
         self.assertEqual(
             config["backend"]["environments"],
             {
-                "dev": {"project_ref_env": "SUPABASE_DEV_PROJECT_REF"},
-                "pre": {"project_ref_env": "MY_PRE_REF"},
-                "prod": {"project_ref_env": "MY_PROD_REF"},
+                "dev": {"project_ref": "dev-ref"},
+                "main": {"project_ref": "prod-ref"},
             },
         )
+        self.assertEqual(
+            MODULE.normalise_project_config(config, ("dev", "main")), config
+        )
 
-    def test_init_config_accepts_one_or_more_ordered_branches(self) -> None:
-        config = MODULE.init_project_config("none", "PRE_REF", "PROD_REF", ["main"])
-        self.assertEqual(config["branches"], ["main"])
-
-    def test_init_config_has_no_preloaded_branch_configuration(self) -> None:
-        config = MODULE.init_project_config("none", "PRE_REF", "PROD_REF")
-        self.assertNotIn("branches", config)
-        self.assertNotIn("branch_aliases", config)
+    def test_pipeline_writes_normalised_project_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".supagit.json"
+            source = {
+                "branches": ["dev", "pre", "prod"],
+                "backend": {
+                    "provider": "supabase",
+                    "environments": {"prod": {"project_ref": "prod-ref"}},
+                },
+            }
+            path.write_text(json.dumps(source) + "\n", encoding="utf-8")
+            pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
+            pipeline.config = source
+            pipeline.config_path = path
+            pipeline.branches = ("dev", "main")
+            pipeline.options = MODULE.Options(False, False, None, None, "never")
+            with patch("builtins.print"):
+                pipeline._normalise_config()
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn("branches", stored)
+            self.assertEqual(
+                stored["backend"]["environments"]["main"],
+                {"project_ref": "prod-ref"},
+            )
 
 
 class PromotionTargetTests(unittest.TestCase):
@@ -520,7 +579,7 @@ class I18nAndUpdateTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             data = path.read_text(encoding="utf-8")
             self.assertIn('"provider": "none"', data)
-            self.assertIn('"main"', data)
+            self.assertNotIn('"branches"', data)
 
     def test_auto_create_config_does_not_preload_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1597,10 +1656,9 @@ class CheckoutFlexTests(unittest.TestCase):
         self.assertEqual(code, 0)
         mocked_input.assert_not_called()
 
-    def test_legacy_backend_targets_follow_detected_branches(self) -> None:
+    def test_legacy_backend_targets_are_rekeyed_to_detected_branches(self) -> None:
         pipeline = MODULE.Pipeline.__new__(MODULE.Pipeline)
-        pipeline._resolved_role_branches = {"dev": "dev", "prod": "main"}
-        config = {
+        config = MODULE.normalise_project_config({
             "branches": {"dev": None, "pre": None, "prod": None},
             "backend": {
                 "provider": "supabase",
@@ -1610,7 +1668,7 @@ class CheckoutFlexTests(unittest.TestCase):
                     "prod": {"project_ref": "prod-ref"},
                 },
             },
-        }
+        }, ("dev", "main"))
         with patch("builtins.print"):
             backend = pipeline._resolve_backend_from_config(config)
         self.assertEqual(backend.targets, {"dev": "dev-ref", "main": "prod-ref"})
