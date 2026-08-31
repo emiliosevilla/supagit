@@ -3599,6 +3599,31 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("crashed", text)
         self.assertTrue(unlinked, "unlink must still run after checkpoint failure")
 
+    def test_database_checkpoint_explains_remote_migration_missing_locally(self) -> None:
+        ENGINE.supagit_i18n.set_lang("en")
+        pipeline = ENGINE.Pipeline.__new__(ENGINE.Pipeline)
+        pipeline.options = ENGINE.Options(
+            dry_run=False, yes=True, config_path=None, message=None, color="never"
+        )
+        pipeline.cli = "supabase"
+        pipeline.linked_ref = None
+        pipeline.root = Path("/repo")
+        pipeline.link_supabase = lambda ref: setattr(pipeline, "linked_ref", ref)  # type: ignore[method-assign]
+        pipeline.unlink_supabase = lambda: setattr(pipeline, "linked_ref", None)  # type: ignore[method-assign]
+
+        def run_raw(command: Sequence[str], **_kwargs):
+            raise ENGINE.ShipError(
+                "Command failed: supabase db push: Remote migration versions not found "
+                "in local migrations directory. migration repair --status reverted "
+                "20260830040724"
+            )
+
+        pipeline.run_raw = run_raw  # type: ignore[method-assign]
+        with self.assertRaises(ENGINE.ShipError) as ctx:
+            pipeline.database_checkpoint("dev", "dev-ref")
+        self.assertIn("20260830040724", str(ctx.exception))
+        self.assertIn("will not run", str(ctx.exception))
+
     def test_database_checkpoint_blocks_on_remote_migration_drift(self) -> None:
         """After push looks clean, remote history must still match local filenames."""
         import tempfile

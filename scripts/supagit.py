@@ -1347,8 +1347,17 @@ class Pipeline:
                         )
                     except supagit_supabase.SupabaseError as exc:
                         raise ShipError(str(exc)) from exc
-            except ShipError:
+            except ShipError as exc:
                 # Fail-closed: never let a failed migrate continue into Git merge / CI.
+                versions = supagit_supabase.remote_only_versions_from_push_error(str(exc))
+                if versions:
+                    raise ShipError(
+                        t(
+                            "error_remote_migration_missing_local",
+                            label=label,
+                            versions=", ".join(versions),
+                        )
+                    ) from exc
                 raise
             except Exception as exc:
                 raise ShipError(

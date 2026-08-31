@@ -206,6 +206,16 @@ class MigrationStateTests(unittest.TestCase):
         remote = supagit_supabase.parse_migration_list_remote(output)
         self.assertEqual(remote, {"20240101000000", "20240202000000"})
 
+    def test_push_error_extracts_remote_only_migration_versions(self) -> None:
+        detail = (
+            "Remote migration versions not found in local migrations directory.\n"
+            "supabase migration repair --status reverted 20260830040724\n"
+        )
+        self.assertEqual(
+            supagit_supabase.remote_only_versions_from_push_error(detail),
+            ("20260830040724",),
+        )
+
     def test_parse_ascii_table_with_backticks(self) -> None:
         output = (
             "LOCAL | REMOTE | TIME (UTC)\n"

@@ -28,6 +28,7 @@ _AUTH_MARKERS = (
 
 # Supabase migration versions are timestamp prefixes (commonly 14 digits).
 _VERSION_RE = re.compile(r"^(\d+)")
+_REMOTE_MIGRATIONS_MISSING_MARKER = "remote migration versions not found in local migrations directory"
 
 
 class SupabaseError(RuntimeError):
@@ -46,6 +47,13 @@ def local_migration_versions(migrations_dir: Path) -> set[str]:
         if match:
             versions.add(match.group(1))
     return versions
+
+
+def remote_only_versions_from_push_error(detail: str) -> tuple[str, ...]:
+    """Return the remote migration versions named by a failed ``db push``."""
+    if _REMOTE_MIGRATIONS_MISSING_MARKER not in detail.lower():
+        return ()
+    return tuple(sorted(set(re.findall(r"\b\d{14}\b", detail))))
 
 
 def parse_migration_list_remote(output: str) -> set[str]:
